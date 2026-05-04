@@ -254,3 +254,19 @@ brew services start clamav
 To disable the local scanner, set `pompelmiEnabled: false` in `config.json`. To require strict failure handling instead of falling back to VT on local-scan errors, set `pompelmiFailureMode: "inconclusive"`.
 
 The daemon refuses to start if `pompelmiEnabled=true` and the configured socket is unreachable. Check `/api/health` for `localScanner.socketReachable`.
+
+## Isolated open-file sandbox (Tart VM)
+
+The daemon can open arbitrary files inside a fresh, disposable macOS VM via Tart. Set up once:
+
+```bash
+brew install cirruslabs/cli/tart
+tart pull ghcr.io/cirruslabs/macos-sequoia-base:latest    # ~30 GB
+tart clone ghcr.io/cirruslabs/macos-sequoia-base:latest filesandbox-base
+```
+
+Then enable in `config.json`: `"sandboxEnabled": true`.
+
+Each session clones the base VM, mounts the chosen file at `/Volumes/My Shared Files/in/` read-only, and provides a writable `out/` for guest output. Closing the VM, clicking Discard, or hitting the idle timeout deletes the clone. Files leaving the sandbox via Export are placed back into the watch folder and re-scanned by the normal pipeline - there is no shortcut.
+
+Network is OFF by default. Clipboard and USB pass-through are disabled. The Apple licence permits up to 2 concurrent macOS VMs per host.
