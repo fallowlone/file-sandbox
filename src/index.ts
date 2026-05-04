@@ -2,7 +2,7 @@ import Watcher from "./watcher.ts";
 import { JobStore } from "./job-store.ts";
 import { startUiServer } from "./ui-server.ts";
 import { startLaunchAgentMonitor } from "./launch-agent-monitor.ts";
-import { config } from "./config.ts";
+import { config, writeConfig } from "./config.ts";
 import FileMover from "./file-mover.ts";
 import { assertSafeHttpHost } from "./http-host-guard.ts";
 import { startInconclusiveSweeper } from "./inconclusive-sweeper.ts";
@@ -47,6 +47,15 @@ const watcher = new Watcher(
     useSeparateVtProcess: config.useSeparateVtProcess,
     localScanner,
     pompelmiFailureMode: config.pompelmiFailureMode,
+    initialMode: config.watcherMode,
+    vtEnabled: config.vtEnabled,
+    onModeChange: (m) => {
+      try {
+        writeConfig({ watcherMode: m });
+      } catch (e) {
+        console.error(`[config] failed to persist mode: ${(e as Error).message}`);
+      }
+    },
   },
 );
 watcher.start();
@@ -86,17 +95,20 @@ async function restoreQuarantineJob(jobId: string) {
 if (config.httpPort !== undefined) {
   const bindHost = process.env.HTTP_HOST ?? config.httpHost ?? "127.0.0.1";
   assertSafeHttpHost(bindHost);
+  const watcherControl = {
+    getMode: () => watcher.getMode(),
+    setMode: (m) => watcher.setMode(m),
+    pause: () => watcher.pause(),
+    resume: () => watcher.resume(),
+    isPaused: () => watcher.isPaused,
+  };
   startUiServer(
     jobStore,
     config.httpPort,
     (id) => watcher.cancel(id),
     deleteQuarantineJob,
     restoreQuarantineJob,
-    {
-      pause: () => watcher.pause(),
-      resume: () => watcher.resume(),
-      isPaused: () => watcher.isPaused,
-    },
+    watcherControl,
   );
 }
 
