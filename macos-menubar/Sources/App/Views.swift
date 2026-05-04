@@ -19,6 +19,7 @@ struct MenuBarContentView: View {
                 ]
             )
             tabBody
+                .frame(minHeight: 520, maxHeight: 600)
             AppFooter(store: store)
         }
         .frame(width: 420)
