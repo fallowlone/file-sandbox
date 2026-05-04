@@ -1,22 +1,54 @@
 import SwiftUI
 
-private struct OptionalWidth: ViewModifier {
-    var width: CGFloat?
+struct SettingsView: View {
+    @ObservedObject var store: SettingsStore
+    @State private var selection: SettingsSection = .paths
+    @State private var showVtKey = false
 
-    func body(content: Content) -> some View {
-        Group {
-            if let w = width {
-                content.frame(width: w)
-            } else {
-                content.frame(maxWidth: .infinity)
+    enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
+        case paths, network, daemon, scan, virustotal
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .paths: return "Paths"
+            case .network: return "Network"
+            case .daemon: return "Daemon launch"
+            case .scan: return "Watch & scan"
+            case .virustotal: return "VirusTotal"
+            }
+        }
+
+        var subtitle: String {
+            switch self {
+            case .paths:      return "Where files live — watch, quarantine, and database."
+            case .network:    return "HTTP endpoint and API token for menubar ↔ daemon."
+            case .daemon:     return "How the menubar launches the background service."
+            case .scan:       return "Watch scope, scan limits, and inconclusive retention."
+            case .virustotal: return "API key used to scan files against VirusTotal."
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .paths:      return "folder.fill"
+            case .network:    return "network"
+            case .daemon:     return "bolt.horizontal.fill"
+            case .scan:       return "eye.fill"
+            case .virustotal: return "shield.lefthalf.filled"
+            }
+        }
+
+        var tint: Color {
+            switch self {
+            case .paths:      return .blue
+            case .network:    return .indigo
+            case .daemon:     return .orange
+            case .scan:       return .teal
+            case .virustotal: return .red
             }
         }
     }
-}
-
-struct SettingsView: View {
-    @ObservedObject var store: SettingsStore
-    @State private var showVtKey = false
 
     private var inconclusiveEnabledBinding: Binding<Bool> {
         Binding(
@@ -34,137 +66,362 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        TabView {
-            generalTab
-                .tabItem { Label("General", systemImage: "gearshape") }
+        VStack(spacing: 0) {
+            NavigationSplitView {
+                sidebar
+                    .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 240)
+            } detail: {
+                detail
+                    .navigationSplitViewColumnWidth(min: 480, ideal: 560)
+            }
+            .navigationSplitViewStyle(.balanced)
 
-            watchScanTab
-                .tabItem { Label("Watch & scan", systemImage: "folder.badge.gearshape") }
+            Divider()
+            footerBar
         }
-        .frame(minWidth: 400, idealWidth: 420, maxWidth: 460, minHeight: 480)
+        .frame(minWidth: 740, idealWidth: 800, minHeight: 560, idealHeight: 620)
         .onAppear { store.fetch() }
     }
 
-    private var generalTab: some View {
-        ScrollView {
-            Form {
-                Section {
-                    stackedTextField(
-                        title: "Watch path",
-                        text: $store.watchPath,
-                        prompt: "/Users/you/Downloads"
-                    )
-                    stackedTextField(
-                        title: "Quarantine path",
-                        text: $store.quarantinePath,
-                        prompt: "/Users/you/.file-sandbox/quarantine"
-                    )
-                    stackedTextField(
-                        title: "Database path",
-                        text: $store.databasePath,
-                        prompt: "./data/jobs.sqlite"
-                    )
-                    Text("Prompts show only when the field is empty; they are not saved.")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                } header: {
-                    Text("PATHS").font(.caption).foregroundColor(.secondary)
-                }
+    // MARK: - Sidebar
 
-                Section {
-                    HStack(spacing: 16) {
-                        HStack(spacing: 8) {
-                            fieldLabel("Port")
-                            TextField("", text: $store.httpPort,
-                                      prompt: Text("3847").foregroundStyle(.tertiary))
-                                .textFieldStyle(.roundedBorder)
-                                .multilineTextAlignment(.center)
-                                .frame(width: 72)
-                        }
-                        HStack(spacing: 8) {
-                            fieldLabel("Host")
-                            TextField("", text: $store.httpHost,
-                                      prompt: Text("127.0.0.1").foregroundStyle(.tertiary))
-                                .textFieldStyle(.roundedBorder)
-                                .frame(maxWidth: .infinity)
-                        }
-                        .frame(maxWidth: .infinity)
+    private var sidebar: some View {
+        List(selection: $selection) {
+            Section {
+                ForEach(SettingsSection.allCases) { section in
+                    Label {
+                        Text(section.title)
+                            .font(.system(size: 13))
+                    } icon: {
+                        iconBadge(section.icon, tint: section.tint, size: 22, cornerRadius: 6)
                     }
-
-                    stackedSecureField(
-                        title: "API token",
-                        text: $store.apiAuthToken,
-                        prompt: "optional"
-                    )
-
-                    Text("If set, sent as Authorization: Bearer. Matches `apiToken` in config.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                } header: {
-                    Text("NETWORK").font(.caption).foregroundColor(.secondary)
+                    .padding(.vertical, 2)
+                    .tag(section)
                 }
-
-                Section {
-                    VStack(alignment: .leading, spacing: 4) {
-                        fieldLabel("VirusTotal API key")
-                        HStack(spacing: 8) {
-                            Group {
-                                if showVtKey {
-                                    TextField("", text: $store.vtApiKey, prompt: promptKeyHint)
-                                        .textFieldStyle(.roundedBorder)
-                                } else {
-                                    SecureField("", text: $store.vtApiKey, prompt: promptKeyHint)
-                                        .textFieldStyle(.roundedBorder)
-                                }
-                            }
-                            .frame(maxWidth: .infinity)
-
-                            Button(action: { showVtKey.toggle() }) {
-                                Image(systemName: showVtKey ? "eye.slash" : "eye")
-                                    .foregroundColor(.secondary)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    Text("Free key at virustotal.com")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                } header: {
-                    Text("VIRUSTOTAL").font(.caption).foregroundColor(.secondary)
-                }
-
-                saveSection
+            } header: {
+                Text("Settings")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.secondary)
+                    .textCase(.uppercase)
             }
-            .formStyle(.grouped)
-            .padding(.bottom, 12)
         }
+        .listStyle(.sidebar)
+    }
+
+    // MARK: - Detail
+
+    @ViewBuilder
+    private var detail: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                hero(for: selection)
+
+                Group {
+                    switch selection {
+                    case .paths:      pathsContent
+                    case .network:    networkContent
+                    case .daemon:     daemonContent
+                    case .scan:       scanContent
+                    case .virustotal: virusTotalContent
+                    }
+                }
+            }
+            .padding(.horizontal, 28)
+            .padding(.top, 28)
+            .padding(.bottom, 20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private func hero(for section: SettingsSection) -> some View {
+        HStack(alignment: .center, spacing: 14) {
+            iconBadge(section.icon, tint: section.tint, size: 44, cornerRadius: 11)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(section.title)
+                    .font(.system(size: 22, weight: .bold))
+                Text(section.subtitle)
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+        }
+    }
+
+    private func iconBadge(
+        _ name: String,
+        tint: Color,
+        size: CGFloat,
+        cornerRadius: CGFloat
+    ) -> some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(tint.gradient)
+            .frame(width: size, height: size)
+            .overlay(
+                Image(systemName: name)
+                    .font(.system(size: size * 0.48, weight: .semibold))
+                    .foregroundColor(.white)
+            )
+            .shadow(color: tint.opacity(0.25), radius: 2, y: 1)
+    }
+
+    private func card<C: View>(@ViewBuilder content: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            content()
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    private func sectionHeading(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundColor(.secondary)
+            .textCase(.uppercase)
+    }
+
+    // MARK: - Panes
+
+    private var pathsContent: some View {
+        card {
+            stackedTextField(title: "Watch path",
+                             text: $store.watchPath,
+                             prompt: "/Users/you/Downloads")
+            divider
+            stackedTextField(title: "Quarantine path",
+                             text: $store.quarantinePath,
+                             prompt: "/Users/you/.file-sandbox/quarantine")
+            divider
+            stackedTextField(title: "Database path",
+                             text: $store.databasePath,
+                             prompt: "./data/jobs.sqlite")
+            helpText("Prompts show only when the field is empty; they are not saved.")
+        }
+    }
+
+    private var networkContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            card {
+                sectionHeading("Endpoint")
+                HStack(alignment: .bottom, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        fieldLabel("Port")
+                        TextField("", text: $store.httpPort,
+                                  prompt: Text("3847").foregroundStyle(.tertiary))
+                            .textFieldStyle(.roundedBorder)
+                            .multilineTextAlignment(.center)
+                            .frame(width: 96)
+                    }
+                    VStack(alignment: .leading, spacing: 5) {
+                        fieldLabel("Host")
+                        TextField("", text: $store.httpHost,
+                                  prompt: Text("127.0.0.1").foregroundStyle(.tertiary))
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+
+            card {
+                sectionHeading("Authentication")
+                stackedSecureField(title: "API token",
+                                   text: $store.apiAuthToken,
+                                   prompt: "optional")
+                helpText("When set, sent as `Authorization: Bearer`. Matches `apiToken` in config.")
+            }
+        }
+    }
+
+    private var daemonContent: some View {
+        card {
+            stackedTextField(title: "Project path",
+                             text: $store.daemonProjectPath,
+                             prompt: "/Users/you/dev/file-sandbox")
+            divider
+            stackedTextField(title: "Node binary",
+                             text: $store.daemonNodeBin,
+                             prompt: "leave empty to auto-detect via PATH")
+            helpText("Used by the Start button. Leave node binary empty to auto-detect via login shell. Runs: `node src/index.ts` (config from config.json).")
+            HStack {
+                Spacer()
+                Button {
+                    store.saveDaemonLocal()
+                } label: {
+                    Label("Save launch settings", systemImage: "tray.and.arrow.down")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+            }
+        }
+    }
+
+    private var scanContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            card {
+                sectionHeading("Watch")
+                Toggle(isOn: $store.watchRecursive) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Watch subfolders")
+                            .font(.system(size: 13, weight: .medium))
+                        Text("Off = only files directly inside the watch folder.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+            }
+
+            card {
+                sectionHeading("Scan limits")
+                rowLabel("Max scan size") {
+                    Stepper(value: $store.maxScanMegabytes, in: 1...8192, step: 1) {
+                        Text("\(store.maxScanMegabytes) MB")
+                            .monospacedDigit()
+                            .font(.body.weight(.medium))
+                            .frame(minWidth: 80, alignment: .trailing)
+                    }
+                }
+                divider
+                rowLabel("Concurrent scans") {
+                    Stepper(value: $store.maxConcurrentScans, in: 1...16, step: 1) {
+                        Text("\(store.maxConcurrentScans)")
+                            .monospacedDigit()
+                            .font(.body.weight(.medium))
+                            .frame(minWidth: 32, alignment: .trailing)
+                    }
+                }
+                divider
+                Toggle(isOn: $store.useSeparateVtProcess) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Run VirusTotal in child process")
+                            .font(.system(size: 13, weight: .medium))
+                        Text("Isolates the scan — recovers cleanly on timeout.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+                helpText("Stored as `maxScanBytes` (MiB × 1024²), `maxConcurrentScans`, `useSeparateVtProcess`.")
+            }
+
+            card {
+                sectionHeading("Inconclusive quarantine")
+                Toggle(isOn: inconclusiveEnabledBinding) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Auto-remove inconclusive files")
+                            .font(.system(size: 13, weight: .medium))
+                        Text("Purges files that never got a clean/dirty verdict.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+
+                if store.inconclusiveRetentionDays > 0 {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Text("Delete after")
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Text("\(store.inconclusiveRetentionDays) day\(store.inconclusiveRetentionDays == 1 ? "" : "s")")
+                                .monospacedDigit()
+                                .font(.body.weight(.semibold))
+                        }
+                        Slider(
+                            value: Binding(
+                                get: { Double(store.inconclusiveRetentionDays) },
+                                set: { store.inconclusiveRetentionDays = max(1, min(365, Int($0.rounded()))) }
+                            ),
+                            in: 1...365,
+                            step: 1
+                        )
+                        HStack(spacing: 8) {
+                            ForEach([7, 14, 30, 90], id: \.self) { quickDayButton($0) }
+                            Spacer()
+                        }
+                    }
+                    .padding(.top, 2)
+                } else {
+                    Text("Inconclusive items stay until you delete them.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                helpText("`inconclusiveRetentionDays` — hourly purge on the daemon.")
+            }
+        }
+    }
+
+    private var virusTotalContent: some View {
+        card {
+            sectionHeading("API key")
+            VStack(alignment: .leading, spacing: 6) {
+                fieldLabel("VirusTotal API key")
+                HStack(spacing: 8) {
+                    Group {
+                        if showVtKey {
+                            TextField("", text: $store.vtApiKey, prompt: promptKeyHint)
+                                .textFieldStyle(.roundedBorder)
+                        } else {
+                            SecureField("", text: $store.vtApiKey, prompt: promptKeyHint)
+                                .textFieldStyle(.roundedBorder)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+
+                    Button(action: { showVtKey.toggle() }) {
+                        Image(systemName: showVtKey ? "eye.slash.fill" : "eye.fill")
+                            .foregroundColor(.secondary)
+                            .font(.system(size: 14))
+                            .frame(width: 28, height: 24)
+                    }
+                    .buttonStyle(.plain)
+                    .help(showVtKey ? "Hide key" : "Show key")
+                }
+            }
+
+            HStack(spacing: 6) {
+                Image(systemName: "link")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Link("Get a free key at virustotal.com",
+                     destination: URL(string: "https://www.virustotal.com")!)
+                    .font(.caption)
+            }
+        }
+    }
+
+    // MARK: - Helpers
+
+    private var divider: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.06))
+            .frame(height: 1)
     }
 
     private var promptKeyHint: Text {
         Text("Paste key from virustotal.com").foregroundStyle(.tertiary)
     }
 
-    @ViewBuilder
     private func stackedTextField(
         title: String,
         text: Binding<String>,
-        prompt: String,
-        fieldWidth: CGFloat? = nil,
-        expandRow: Bool = true
+        prompt: String
     ) -> some View {
-        let inner = VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 5) {
             fieldLabel(title)
             TextField("", text: text, prompt: Text(prompt).foregroundStyle(.tertiary))
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(1)
-                .multilineTextAlignment(fieldWidth != nil ? .trailing : .leading)
-                .modifier(OptionalWidth(width: fieldWidth))
         }
-        if expandRow {
-            inner.frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            inner.fixedSize(horizontal: true, vertical: false)
-        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func stackedSecureField(
@@ -172,113 +429,34 @@ struct SettingsView: View {
         text: Binding<String>,
         prompt: String
     ) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 5) {
             fieldLabel(title)
             SecureField("", text: text, prompt: Text(prompt).foregroundStyle(.tertiary))
                 .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: .infinity)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func fieldLabel(_ text: String) -> some View {
         Text(text)
-            .font(.callout.weight(.medium))
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundColor(.secondary)
+            .textCase(.uppercase)
     }
 
-    private var watchScanTab: some View {
-        ScrollView {
-            Form {
-                Section {
-                    Toggle("Watch subfolders", isOn: $store.watchRecursive)
-                    Text("Off = only files directly inside the watch folder (`watchRecursive`).")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                } header: {
-                    Text("WATCH").font(.caption).foregroundColor(.secondary)
-                }
+    private func helpText(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundColor(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
 
-                Section {
-                    rowLabel("Max scan size") {
-                        HStack(spacing: 12) {
-                            Stepper(
-                                value: $store.maxScanMegabytes,
-                                in: 1...8192,
-                                step: 1
-                            ) {
-                                Text("\(store.maxScanMegabytes) MB")
-                                    .monospacedDigit()
-                                    .frame(minWidth: 72, alignment: .trailing)
-                            }
-                        }
-                    }
-                    rowLabel("Concurrent scans") {
-                        Stepper(
-                            value: $store.maxConcurrentScans,
-                            in: 1...16,
-                            step: 1
-                        ) {
-                            Text("\(store.maxConcurrentScans)")
-                                .monospacedDigit()
-                                .frame(minWidth: 24, alignment: .trailing)
-                        }
-                    }
-                    Toggle("VirusTotal in child process", isOn: $store.useSeparateVtProcess)
-                    Text("Stored as `maxScanBytes` (MiB×1024²), `maxConcurrentScans`, `useSeparateVtProcess`.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                } header: {
-                    Text("VIRUSTOTAL LIMITS").font(.caption).foregroundColor(.secondary)
-                }
-
-                Section {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Toggle("Auto-remove inconclusive files", isOn: inconclusiveEnabledBinding)
-
-                        if store.inconclusiveRetentionDays > 0 {
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack {
-                                    Text("Delete after")
-                                        .foregroundColor(.secondary)
-                                    Spacer()
-                                    Text("\(store.inconclusiveRetentionDays) days")
-                                        .monospacedDigit()
-                                        .font(.body.weight(.medium))
-                                }
-                                Slider(
-                                    value: Binding(
-                                        get: { Double(store.inconclusiveRetentionDays) },
-                                        set: { store.inconclusiveRetentionDays = max(1, min(365, Int($0.rounded()))) }
-                                    ),
-                                    in: 1...365,
-                                    step: 1
-                                )
-                                HStack(spacing: 8) {
-                                    quickDayButton(7)
-                                    quickDayButton(14)
-                                    quickDayButton(30)
-                                    quickDayButton(90)
-                                }
-                            }
-                        } else {
-                            Text("Inconclusive items stay until you delete them.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    .padding(.vertical, 2)
-
-                    Text("`inconclusiveRetentionDays` — hourly purge on the daemon.")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                } header: {
-                    Text("INCONCLUSIVE QUARANTINE").font(.caption).foregroundColor(.secondary)
-                }
-
-                saveSection
-            }
-            .formStyle(.grouped)
-            .padding(.bottom, 12)
+    private func rowLabel<V: View>(_ title: String, @ViewBuilder content: () -> V) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title)
+                .font(.system(size: 13))
+            Spacer()
+            content()
         }
     }
 
@@ -288,52 +466,89 @@ struct SettingsView: View {
             store.inconclusiveRetentionDays = days
         } label: {
             Text("\(days)d")
-                .font(.caption.weight(.medium))
-                .padding(.horizontal, 10)
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 12)
                 .padding(.vertical, 5)
                 .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(on ? Color.accentColor.opacity(0.35) : Color.secondary.opacity(0.15))
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(on ? Color.accentColor : Color.secondary.opacity(0.15))
                 )
+                .foregroundColor(on ? .white : .primary)
         }
         .buttonStyle(.plain)
     }
 
-    /// Avoids `LabeledContent` + control duplication in grouped Form on macOS.
+    // MARK: - Footer
+
+    private var footerBar: some View {
+        HStack(spacing: 12) {
+            statusView
+            Spacer()
+            Button {
+                store.save()
+            } label: {
+                Text("Save")
+                    .frame(minWidth: 72)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(store.isSaving || store.isLoading)
+            .keyboardShortcut(.return, modifiers: [.command])
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 14)
+        .background(.ultraThinMaterial)
+    }
+
     @ViewBuilder
-    private func rowLabel<V: View>(_ title: String, @ViewBuilder content: () -> V) -> some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text(title)
-                .frame(width: 132, alignment: .leading)
-            content()
+    private var statusView: some View {
+        if store.isLoading {
+            inlineProgress("Loading…")
+        } else if store.isSaving {
+            inlineProgress("Saving…")
+        } else if let result = store.saveResult {
+            if result == "ok" {
+                statusPill(icon: "checkmark.circle.fill",
+                           color: .green,
+                           text: "Saved — restart daemon to apply")
+            } else {
+                statusPill(icon: "xmark.octagon.fill",
+                           color: .red,
+                           text: result.replacingOccurrences(of: "err:", with: ""))
+            }
+        } else if let err = store.loadError {
+            statusPill(icon: "wifi.exclamationmark",
+                       color: .orange,
+                       text: err)
+        } else {
+            Text("⌘↩ to save")
+                .font(.caption)
+                .foregroundColor(.secondary)
         }
     }
 
-    private var saveSection: some View {
-        Section {
-            HStack {
-                if store.isLoading {
-                    ProgressView().controlSize(.small)
-                    Text("Loading…").foregroundColor(.secondary).font(.caption)
-                } else if let result = store.saveResult {
-                    if result == "ok" {
-                        Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
-                        Text("Saved — restart daemon to apply")
-                            .font(.caption).foregroundColor(.secondary)
-                    } else {
-                        Image(systemName: "xmark.circle.fill").foregroundColor(.red)
-                        Text(result.replacingOccurrences(of: "err:", with: ""))
-                            .font(.caption).foregroundColor(.red)
-                    }
-                } else if let err = store.loadError {
-                    Image(systemName: "wifi.exclamationmark").foregroundColor(.orange)
-                    Text(err).font(.caption).foregroundColor(.orange)
-                }
-                Spacer()
-                Button("Save") { store.save() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(store.isSaving || store.isLoading)
-            }
+    private func inlineProgress(_ text: String) -> some View {
+        HStack(spacing: 6) {
+            ProgressView().controlSize(.small)
+            Text(text).font(.caption).foregroundColor(.secondary)
         }
+    }
+
+    private func statusPill(icon: String, color: Color, text: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon).foregroundColor(color)
+            Text(text)
+                .font(.caption)
+                .foregroundColor(.primary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(
+            Capsule().fill(color.opacity(0.12))
+        )
+        .overlay(
+            Capsule().strokeBorder(color.opacity(0.25), lineWidth: 0.5)
+        )
     }
 }

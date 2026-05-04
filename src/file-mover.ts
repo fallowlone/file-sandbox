@@ -27,8 +27,8 @@ class FileMover {
       await copyFile(source, quarantineFilePath);
       await unlink(source);
       console.log(`Moved to ${quarantineFilePath}`);
-    } catch {
-      throw new Error(`Failed to move ${source} to ${this.destination}`);
+    } catch (e) {
+      throw new Error(`Failed to move ${source} to ${this.destination}: ${e}`);
     }
 
     return { quarantineFilePath, originalBaseName };

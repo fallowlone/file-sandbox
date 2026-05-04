@@ -73,6 +73,11 @@ if (config.httpPort !== undefined) {
     (id) => watcher.cancel(id),
     deleteQuarantineJob,
     restoreQuarantineJob,
+    {
+      pause: () => watcher.pause(),
+      resume: () => watcher.resume(),
+      isPaused: () => watcher.isPaused,
+    },
   );
 }
 

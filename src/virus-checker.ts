@@ -23,6 +23,65 @@ interface IVTUploadResponse {
 
 const apiUrl = "https://www.virustotal.com/api/v3";
 
+const MAX_UPLOAD_ATTEMPTS = 4;
+
+export interface UploadRetryContext {
+  attempt: number;
+  lastError: "network-error" | "http-error";
+  httpStatus?: number;
+}
+
+/**
+ * Decide whether to retry a failed upload.
+ *
+ * TODO(learning): implement real policy. Current default = no retry (legacy behavior).
+ *
+ * Considerations:
+ *   - attempt is 1-based; returning false on attempt === maxAttempts stops retries
+ *   - HTTP 4xx (except 429) = bad request, auth, invalid file → retry won't help
+ *   - HTTP 429 = rate limit → worth retrying with longer backoff
+ *   - HTTP 5xx = server error → transient, retry
+ *   - network-error = connection reset / DNS / TLS → transient, retry
+ */
+function shouldRetryUpload(
+  _ctx: UploadRetryContext,
+  _maxAttempts: number,
+): boolean {
+  return false;
+}
+
+/**
+ * Delay (ms) before next upload attempt.
+ *
+ * TODO(learning): implement real backoff. Current default = 0 (irrelevant until retries enabled).
+ *
+ * Considerations:
+ *   - VT public API: 4 requests/min → base ≥ 15000ms on 429
+ *   - Exponential (2^attempt * base) prevents hammering the service
+ *   - Small jitter (±20%) avoids thundering-herd if many files scanned concurrently
+ *   - Cap at e.g. 120_000 so worst-case wait stays bounded
+ */
+function backoffMsForAttempt(_attempt: number): number {
+  return 0;
+}
+
+function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      return reject(new DOMException("Aborted", "AbortError"));
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 export interface VirusCheckOptions {
   maxBytes: number;
 }
@@ -64,32 +123,68 @@ export async function virusCheckFile(
   const formData = new FormData();
   formData.append("file", new Blob([file]));
 
-  let request: Response;
-  try {
-    request = await fetch(apiUrl + "/files", {
-      method: "POST",
-      headers: {
-        "x-apikey": apiKey,
-      },
-      body: formData,
-      signal,
-    });
-  } catch (e) {
-    if (e instanceof Error && e.name === "AbortError") {
+  let request: Response | null = null;
+  let lastFailure: VirusCheckResult | null = null;
+
+  for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
+    let resp: Response;
+    try {
+      resp = await fetch(apiUrl + "/files", {
+        method: "POST",
+        headers: { "x-apikey": apiKey },
+        body: formData,
+        signal,
+      });
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") {
+        return { verdict: "inconclusive", message: "Cancelled by user" };
+      }
+      lastFailure = {
+        verdict: "inconclusive",
+        message: `Upload network error (attempt ${attempt}/${MAX_UPLOAD_ATTEMPTS}): ${e}`,
+      };
+      const retry = shouldRetryUpload(
+        { attempt, lastError: "network-error" },
+        MAX_UPLOAD_ATTEMPTS,
+      );
+      if (!retry) break;
+      try {
+        await sleepAbortable(backoffMsForAttempt(attempt), signal);
+      } catch {
+        return { verdict: "inconclusive", message: "Cancelled by user" };
+      }
+      continue;
+    }
+
+    if (resp.ok) {
+      request = resp;
+      break;
+    }
+
+    const body = await resp.text();
+    lastFailure = {
+      verdict: "inconclusive",
+      message: `Upload failed HTTP ${resp.status} (attempt ${attempt}/${MAX_UPLOAD_ATTEMPTS}): ${body.slice(0, 500)}`,
+    };
+    const retry = shouldRetryUpload(
+      { attempt, lastError: "http-error", httpStatus: resp.status },
+      MAX_UPLOAD_ATTEMPTS,
+    );
+    if (!retry) break;
+    try {
+      await sleepAbortable(backoffMsForAttempt(attempt), signal);
+    } catch {
       return { verdict: "inconclusive", message: "Cancelled by user" };
     }
-    return {
-      verdict: "inconclusive",
-      message: `Upload network error: ${e}`,
-    };
   }
 
-  if (!request.ok) {
-    const body = await request.text();
-    return {
-      verdict: "inconclusive",
-      message: `Upload failed HTTP ${request.status}: ${body.slice(0, 500)}`,
-    };
+  if (!request) {
+    return (
+      lastFailure ?? {
+        verdict: "inconclusive",
+        message: "Upload failed with no details",
+      }
+    );
   }
 
   let uploadJson: IVTUploadResponse;
@@ -121,9 +216,9 @@ export async function virusCheckFile(
   const pollMs = Number(process.env.VT_POLL_INTERVAL_MS) || 15000;
 
   for (let i = 0; i < maxPolls; i++) {
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
-
-    if (signal?.aborted) {
+    try {
+      await sleepAbortable(pollMs, signal);
+    } catch {
       return { verdict: "inconclusive", message: "Cancelled by user" };
     }
 

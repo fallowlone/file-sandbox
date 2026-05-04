@@ -9,14 +9,6 @@ import { JobConflictError } from "./job-store.ts";
 import { config, writeConfig, maskSecret, type RawConfig } from "./config.ts";
 import { metrics } from "./metrics.ts";
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
 function shouldUpdateSecretField(
   incoming: string | undefined,
   currentReal: string,
@@ -104,12 +96,19 @@ function gateHttpAuth(req: Request, res: Response, next: NextFunction): void {
   res.status(401).json({ error: "Unauthorized" });
 }
 
+export interface WatcherControl {
+  pause: () => void;
+  resume: () => void;
+  isPaused: () => boolean;
+}
+
 export function startUiServer(
   store: JobStore,
   port: number,
   cancelJob?: (id: string) => void,
   deleteQuarantinedFile?: (id: string, detail?: string) => Promise<void>,
   restoreQuarantinedFile?: (id: string) => Promise<void>,
+  watcherControl?: WatcherControl,
 ) {
   const host = process.env.HTTP_HOST ?? config.httpHost ?? "127.0.0.1";
   const app = express();
@@ -140,16 +139,37 @@ export function startUiServer(
 
   app.get("/api/jobs", (_req, res) => {
     try {
-      res.json({ jobs: store.listRecent(200) });
+      res.json({
+        jobs: store.listRecent(200),
+        paused: watcherControl?.isPaused() ?? false,
+      });
     } catch (e) {
       res.status(500).json({ error: String(e) });
     }
   });
 
+  app.post("/api/watcher/pause", (_req, res) => {
+    if (!watcherControl) {
+      res.status(501).json({ error: "watcher control not configured" });
+      return;
+    }
+    watcherControl.pause();
+    res.json({ ok: true, paused: true });
+  });
+
+  app.post("/api/watcher/resume", (_req, res) => {
+    if (!watcherControl) {
+      res.status(501).json({ error: "watcher control not configured" });
+      return;
+    }
+    watcherControl.resume();
+    res.json({ ok: true, paused: false });
+  });
+
   app.delete("/api/jobs", (_req, res) => {
     try {
-      store.clearAll();
-      res.json({ ok: true });
+      const { deleted, skipped } = store.clearAll();
+      res.json({ ok: true, deleted, skipped });
     } catch (e) {
       res.status(500).json({ error: String(e) });
     }
@@ -276,25 +296,6 @@ export function startUiServer(
   });
 
   app.get("/", (_req, res) => {
-    const jobs = store.listRecent(200);
-    const rows = jobs
-      .map((j) => {
-        const canAct = j.status === "quarantine_kept";
-        const deleteBtn = canAct
-          ? `<button type="button" onclick="deleteFile('${escapeHtml(j.id)}')">Delete</button>`
-          : "";
-        const restoreBtn = canAct
-          ? `<button type="button" onclick="restoreFile('${escapeHtml(j.id)}')">Restore</button>`
-          : "";
-        const vtCell = j.vt_verdict
-          ? j.vt_verdict === "oversized"
-            ? `<span class="oversized">${escapeHtml(j.vt_verdict)}</span>`
-            : escapeHtml(j.vt_verdict)
-          : "—";
-        return `<tr><td>${escapeHtml(j.id.slice(0, 8))}…</td><td>${escapeHtml(j.original_name)}</td><td>${escapeHtml(j.status)}</td><td>${vtCell}</td><td title="${escapeHtml(j.detail ?? "")}">${escapeHtml((j.detail ?? "").slice(0, 80))}${(j.detail?.length ?? 0) > 80 ? "…" : ""}</td><td>${escapeHtml(j.final_path ?? "—")}</td><td>${restoreBtn} ${deleteBtn}</td></tr>`;
-      })
-      .join("");
-
     res.type("html").send(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -310,31 +311,118 @@ export function startUiServer(
     h1 { font-size: 1.1rem; }
     a { color: #8cb4ff; }
     .oversized { color: #ffb347; font-weight: 600; }
+    .refresh-status { color: #666; font-size: 12px; margin-left: 0.5rem; }
   </style>
 </head>
 <body>
   <h1>Quarantine / VirusTotal job queue</h1>
-  <p><a href="/api/jobs">JSON</a> · <a href="/api/health">health</a> · auto-refresh 15s</p>
+  <p><a href="/api/jobs">JSON</a> · <a href="/api/health">health</a> · refreshes every 15s<span id="status" class="refresh-status"></span></p>
   <table>
     <thead><tr><th>id</th><th>file</th><th>status</th><th>VT</th><th>detail</th><th>final path</th><th>actions</th></tr></thead>
-    <tbody>${rows || "<tr><td colspan=7>no jobs yet</td></tr>"}</tbody>
+    <tbody id="jobs"><tr><td colspan="7">loading…</td></tr></tbody>
   </table>
   <script>
-    setTimeout(() => location.reload(), 15000);
+    const tbody = document.getElementById('jobs');
+    const status = document.getElementById('status');
+
+    function cell(text) {
+      const td = document.createElement('td');
+      td.textContent = text;
+      return td;
+    }
+
+    function rowFor(j) {
+      const tr = document.createElement('tr');
+      tr.appendChild(cell(j.id.slice(0, 8) + '…'));
+      tr.appendChild(cell(j.original_name));
+      tr.appendChild(cell(j.status));
+
+      const vt = document.createElement('td');
+      if (!j.vt_verdict) {
+        vt.textContent = '—';
+      } else if (j.vt_verdict === 'oversized') {
+        const span = document.createElement('span');
+        span.className = 'oversized';
+        span.textContent = j.vt_verdict;
+        vt.appendChild(span);
+      } else {
+        vt.textContent = j.vt_verdict;
+      }
+      tr.appendChild(vt);
+
+      const det = document.createElement('td');
+      const full = j.detail ?? '';
+      det.title = full;
+      det.textContent = full.length > 80 ? full.slice(0, 80) + '…' : full;
+      tr.appendChild(det);
+
+      tr.appendChild(cell(j.final_path ?? '—'));
+
+      const acts = document.createElement('td');
+      if (j.status === 'quarantine_kept') {
+        const r = document.createElement('button');
+        r.type = 'button';
+        r.textContent = 'Restore';
+        r.addEventListener('click', () => restoreFile(j.id));
+        acts.appendChild(r);
+        acts.appendChild(document.createTextNode(' '));
+        const d = document.createElement('button');
+        d.type = 'button';
+        d.textContent = 'Delete';
+        d.addEventListener('click', () => deleteFile(j.id));
+        acts.appendChild(d);
+      }
+      tr.appendChild(acts);
+      return tr;
+    }
+
+    function render(jobs) {
+      tbody.replaceChildren();
+      if (!jobs.length) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 7;
+        td.textContent = 'no jobs yet';
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+        return;
+      }
+      for (const j of jobs) tbody.appendChild(rowFor(j));
+    }
+
+    async function refresh() {
+      try {
+        const res = await fetch('/api/jobs');
+        if (!res.ok) {
+          status.textContent = 'error ' + res.status;
+          return;
+        }
+        const data = await res.json();
+        render(data.jobs ?? []);
+        status.textContent = '';
+      } catch (e) {
+        status.textContent = 'offline';
+      }
+    }
+
     async function deleteFile(id) {
       if (!confirm('Permanently delete quarantined file?')) return;
       const res = await fetch('/api/jobs/' + id + '/quarantine', { method: 'DELETE' });
       const data = await res.json();
-      if (data.ok) location.reload();
+      if (data.ok) refresh();
       else alert('Error: ' + data.error);
     }
+
     async function restoreFile(id) {
       if (!confirm('Restore this file to the watch folder?')) return;
       const res = await fetch('/api/jobs/' + id + '/restore', { method: 'POST' });
       const data = await res.json();
-      if (data.ok) location.reload();
+      if (data.ok) refresh();
       else alert('Error: ' + data.error);
     }
+
+    refresh();
+    setInterval(refresh, 15000);
   </script>
 </body>
 </html>`);

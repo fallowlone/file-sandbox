@@ -18,6 +18,20 @@ struct DaemonConfig: Codable {
     var configEncryptedAtRest: Bool?
 }
 
+enum DaemonLocalStorage {
+    private static let projectPathKey = "filesandboxDaemonProjectPath"
+    private static let nodeBinKey = "filesandboxDaemonNodeBin"
+
+    static var projectPath: String {
+        get { UserDefaults.standard.string(forKey: projectPathKey) ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: projectPathKey) }
+    }
+    static var nodeBin: String {
+        get { UserDefaults.standard.string(forKey: nodeBinKey) ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: nodeBinKey) }
+    }
+}
+
 class SettingsStore: ObservableObject {
     @Published var vtApiKey: String = ""
     @Published var watchPath: String = ""
@@ -34,6 +48,10 @@ class SettingsStore: ObservableObject {
     @Published var useSeparateVtProcess: Bool = false
     @Published var inconclusiveRetentionDays: Int = 0
 
+    // Stored locally — no daemon required (used when daemon is offline)
+    @Published var daemonProjectPath: String = ""
+    @Published var daemonNodeBin: String = ""
+
     @Published var isLoading = false
     @Published var isSaving = false
     @Published var saveResult: String? = nil
@@ -44,6 +62,13 @@ class SettingsStore: ObservableObject {
     init() {
         self.port = ProcessInfo.processInfo.environment["FILE_SANDBOX_PORT"] ?? "3847"
         self.apiAuthToken = ClientAuthStorage.token
+        self.daemonProjectPath = DaemonLocalStorage.projectPath
+        self.daemonNodeBin = DaemonLocalStorage.nodeBin
+    }
+
+    func saveDaemonLocal() {
+        DaemonLocalStorage.projectPath = daemonProjectPath
+        DaemonLocalStorage.nodeBin = daemonNodeBin
     }
 
     private func authorizedConfigRequest(url: URL) -> URLRequest {

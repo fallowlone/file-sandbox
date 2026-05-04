@@ -179,8 +179,23 @@ export class JobStore {
       .run(now, jobId);
   }
 
-  clearAll() {
-    this.db.prepare(`DELETE FROM jobs`).run();
+  /**
+   * Delete settled job rows. Rows with active status
+   * (`received`, `in_quarantine`, `scanning`) are kept so in-flight
+   * pipeline stages (move → scan → restore) keep their row reference.
+   */
+  clearAll(): { deleted: number; skipped: number } {
+    const active: JobStatus[] = ["received", "in_quarantine", "scanning"];
+    const placeholders = active.map(() => "?").join(",");
+    const skippedRow = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM jobs WHERE status IN (${placeholders})`,
+      )
+      .get(...active) as { n: number };
+    const res = this.db
+      .prepare(`DELETE FROM jobs WHERE status NOT IN (${placeholders})`)
+      .run(...active);
+    return { deleted: res.changes, skipped: skippedRow.n };
   }
 
   close() {

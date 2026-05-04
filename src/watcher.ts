@@ -30,6 +30,19 @@ function setQuarantineXattr(filePath: string): Promise<void> {
   });
 }
 
+function clearAllXattrs(filePath: string): Promise<void> {
+  return new Promise((resolve) => {
+    execFile("xattr", ["-c", filePath], (err) => {
+      if (err) {
+        console.warn(
+          `[xattr] Failed to clear xattrs on ${filePath}: ${err.message}`,
+        );
+      }
+      resolve();
+    });
+  });
+}
+
 const BROWSER_TEMP_EXTENSIONS = [
   ".crdownload",
   ".download",
@@ -59,6 +72,7 @@ class Watcher {
   private readonly watchRecursive: boolean;
   private readonly maxScanBytes: number;
   private readonly scanSemaphore: Semaphore;
+  private paused = false;
 
   constructor(
     watchPath: string,
@@ -90,6 +104,18 @@ class Watcher {
     this.restoringPaths.add(destPath);
   }
 
+  pause() {
+    this.paused = true;
+  }
+
+  resume() {
+    this.paused = false;
+  }
+
+  get isPaused(): boolean {
+    return this.paused;
+  }
+
   cancel(jobId: string) {
     const controller = this.scanControllers.get(jobId);
     if (controller) {
@@ -113,12 +139,21 @@ class Watcher {
       this.watchPath,
       { recursive: rawRecursive },
       (event, filename) => {
+        if (this.paused) return;
         if (!filename || event !== "rename") return;
         if ((this.ignored as string[]).some((ign) => filename.endsWith(ign)))
           return;
         if (isBrowserTemp(filename)) return;
         const fullPath = join(this.watchPath, filename);
         if (this.restoringPaths.has(fullPath)) return;
+        if (this.processingPaths.has(fullPath)) return;
+        // Skip directories — only lock actual files
+        try {
+          const st = require("fs").statSync(fullPath);
+          if (st.isDirectory()) return;
+        } catch {
+          return; // file doesn't exist yet
+        }
         fsChmod(fullPath, 0o000, () => {});
         setQuarantineXattr(fullPath).catch(() => {});
       },
@@ -136,10 +171,19 @@ class Watcher {
     });
 
     const handleFile = async (filepath: string) => {
+      if (this.paused) return;
       if (isBrowserTemp(filepath)) return;
 
       const fname = basename(filepath);
       if (this.ignored.some((ign) => fname === ign)) return;
+
+      // Skip directories
+      try {
+        const st = await statAsync(filepath);
+        if (st.isDirectory()) return;
+      } catch {
+        return;
+      }
 
       if (this.restoringPaths.has(filepath)) {
         this.restoringPaths.delete(filepath);
@@ -209,6 +253,12 @@ class Watcher {
                 quarantineFilePath,
                 originalBaseName,
               );
+              await chmodAsync(restoredPath, 0o644).catch((err) =>
+                console.warn(
+                  `[chmod] Failed to set 0o644 on ${restoredPath}: ${err.message}`,
+                ),
+              );
+              await clearAllXattrs(restoredPath);
               this.jobStore?.setRestored(jobId, restoredPath);
             }
             return;
@@ -261,6 +311,12 @@ class Watcher {
               quarantineFilePath,
               originalBaseName,
             );
+            await chmodAsync(restoredPath, 0o644).catch((err) =>
+              console.warn(
+                `[chmod] Failed to set 0o644 on ${restoredPath}: ${err.message}`,
+              ),
+            );
+            await clearAllXattrs(restoredPath);
             this.jobStore?.setRestored(jobId, restoredPath);
           } else {
             console.log(

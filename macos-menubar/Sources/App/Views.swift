@@ -45,8 +45,7 @@ struct JobRowView: View {
 
     var isScanning: Bool { job.status == "scanning" }
 
-    @State private var glowOpacity: Double = 0.03
-    @State private var shimmerOffset: CGFloat = -200
+    @State private var animateShimmer: Bool = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -130,11 +129,13 @@ struct JobRowView: View {
         .background {
             if isScanning {
                 ZStack {
-                    // Pulsing orange glow
                     RoundedRectangle(cornerRadius: 6)
-                        .fill(Color.orange.opacity(glowOpacity))
+                        .fill(Color.orange.opacity(animateShimmer ? 0.11 : 0.03))
+                        .animation(
+                            .easeInOut(duration: 1.1).repeatForever(autoreverses: true),
+                            value: animateShimmer
+                        )
 
-                    // Moving shimmer stripe
                     RoundedRectangle(cornerRadius: 6)
                         .fill(
                             LinearGradient(
@@ -147,25 +148,23 @@ struct JobRowView: View {
                                 endPoint: .trailing
                             )
                         )
-                        .offset(x: shimmerOffset)
+                        .offset(x: animateShimmer ? 420 : -200)
+                        .animation(
+                            .linear(duration: 1.6).repeatForever(autoreverses: false),
+                            value: animateShimmer
+                        )
                         .clipped()
                 }
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 6))
-        .onAppear { startAnimations() }
+        .onAppear {
+            if isScanning {
+                DispatchQueue.main.async { animateShimmer = true }
+            }
+        }
         .onChange(of: isScanning) { _, scanning in
-            if scanning { startAnimations() }
-        }
-    }
-
-    private func startAnimations() {
-        guard isScanning else { return }
-        withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) {
-            glowOpacity = 0.11
-        }
-        withAnimation(.linear(duration: 1.6).repeatForever(autoreverses: false)) {
-            shimmerOffset = 420
+            animateShimmer = scanning
         }
     }
 }
@@ -184,11 +183,6 @@ struct MenuBarContentView: View {
             footer
         }
         .frame(width: 420)
-        .onAppear {
-            DispatchQueue.main.async {
-                NSApp.activate(ignoringOtherApps: true)
-            }
-        }
     }
 
     private var header: some View {
@@ -199,9 +193,38 @@ struct MenuBarContentView: View {
             Text("FileSandbox")
                 .font(.system(size: 14, weight: .semibold))
             Spacer()
+            if store.isConnected && store.isPaused {
+                Text("Paused")
+                    .font(.system(size: 10, weight: .semibold))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color.orange.opacity(0.18))
+                    .foregroundColor(.orange)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+            }
             Circle()
-                .fill(store.isConnected ? Color.green : Color.red)
+                .fill(store.isConnected ? (store.isPaused ? Color.orange : Color.green) : Color.red)
                 .frame(width: 7, height: 7)
+            if store.isConnected {
+                Button(action: {
+                    if store.isPaused { store.resumeWatcher() } else { store.pauseWatcher() }
+                }) {
+                    Image(systemName: store.isPaused ? "play.fill" : "pause.fill")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(store.isPaused ? .accentColor : .secondary)
+                .help(store.isPaused ? "Resume scanning of new files" : "Pause scanning — incoming files ignored")
+            }
+            if store.isDaemonRunning && !store.isConnected {
+                Button(action: { store.stopDaemon() }) {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.red.opacity(0.7))
+                .help("Stop daemon process")
+            }
             Button(action: { store.fetch() }) {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 12))
@@ -237,16 +260,45 @@ struct MenuBarContentView: View {
     @ViewBuilder
     private var jobList: some View {
         if !store.isConnected {
-            VStack(spacing: 8) {
-                Image(systemName: "wifi.exclamationmark")
+            VStack(spacing: 10) {
+                Image(systemName: store.isDaemonRunning ? "hourglass" : "wifi.exclamationmark")
                     .font(.system(size: 26))
                     .foregroundColor(.orange)
-                Text("Cannot reach daemon")
+                Text(store.isDaemonRunning ? "Starting daemon…" : "Daemon is not running")
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
+
+                if let err = store.daemonLaunchError {
+                    Text(err)
+                        .font(.caption)
+                        .foregroundColor(.red)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 12)
+                }
+
+                if !store.isDaemonRunning {
+                    let canLaunch = !settingsStore.daemonProjectPath.isEmpty
+                    Button(action: {
+                        store.startDaemon(
+                            projectPath: settingsStore.daemonProjectPath,
+                            nodeBin: settingsStore.daemonNodeBin
+                        )
+                    }) {
+                        Label("Start Daemon", systemImage: "play.fill")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canLaunch)
+
+                    if !canLaunch {
+                        Text("Set project path in Settings first")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 28)
+            .padding(.vertical, 20)
         } else if store.jobs.isEmpty {
             VStack(spacing: 8) {
                 Image(systemName: "tray")
@@ -261,7 +313,7 @@ struct MenuBarContentView: View {
         } else {
             let visible = Array(store.jobs.prefix(30))
             ScrollView {
-                VStack(spacing: 0) {
+                LazyVStack(spacing: 0) {
                     ForEach(visible) { job in
                         JobRowView(
                             job: job,
@@ -275,7 +327,7 @@ struct MenuBarContentView: View {
                     }
                 }
             }
-            .frame(minHeight: 160, maxHeight: 700)
+            .frame(height: 520)
         }
     }
 
