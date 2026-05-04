@@ -24,6 +24,12 @@ export interface RawConfig {
   useSeparateVtProcess?: boolean;
   /** Delete inconclusive quarantine_kept jobs older than this many days (0 = off). */
   inconclusiveRetentionDays?: number;
+  /** Run pompelmi/ClamAV before VirusTotal. Defaults to true. */
+  pompelmiEnabled?: boolean;
+  /** UNIX socket path for clamd. Defaults to /tmp/clamd.sock. */
+  pompelmiSocketPath?: string;
+  /** What to do when pompelmi returns ScanError. Defaults to "bypass". */
+  pompelmiFailureMode?: "bypass" | "inconclusive";
 }
 
 const configPath = join(process.cwd(), "config.json");
@@ -158,5 +164,12 @@ export const config = {
     file.useSeparateVtProcess ?? envBool("USE_SEPARATE_VT_PROCESS", false),
   inconclusiveRetentionDays:
     file.inconclusiveRetentionDays ?? envInt("INCONCLUSIVE_RETENTION_DAYS", 0),
+  pompelmiEnabled: file.pompelmiEnabled ?? envBool("POMPELMI_ENABLED", true),
+  pompelmiSocketPath:
+    file.pompelmiSocketPath ?? process.env.POMPELMI_SOCKET ?? "/tmp/clamd.sock",
+  pompelmiFailureMode: ((): "bypass" | "inconclusive" => {
+    const v = (file.pompelmiFailureMode ?? process.env.POMPELMI_FAILURE_MODE ?? "bypass").trim().toLowerCase();
+    return v === "inconclusive" ? "inconclusive" : "bypass";
+  })(),
   configEncryptedAtRest: Boolean(masterKeyFromEnv()),
 };
