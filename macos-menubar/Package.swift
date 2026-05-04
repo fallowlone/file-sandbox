@@ -3,11 +3,15 @@ import PackageDescription
 
 let package = Package(
     name: "FileSandboxMenuBar",
+    defaultLocalization: "en",
     platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(
             name: "FileSandboxMenuBar",
-            path: "Sources/App"
+            path: "Sources/App",
+            resources: [
+                .process("Resources")
+            ]
         ),
     ]
 )
