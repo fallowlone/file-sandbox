@@ -235,3 +235,22 @@ file-sandbox/
 ## License
 
 MIT
+
+## Local scanner (pompelmi / ClamAV)
+
+By default the daemon runs a local ClamAV scan on every quarantined file before sending it to VirusTotal. Install ClamAV on the host:
+
+```bash
+brew install clamav
+freshclam
+# Edit /opt/homebrew/etc/clamav/clamd.conf:
+#   uncomment LocalSocket /tmp/clamd.sock
+#   set MaxFileSize 4000M
+#   set MaxScanSize 4000M
+#   set StreamMaxLength 4000M
+brew services start clamav
+```
+
+To disable the local scanner, set `pompelmiEnabled: false` in `config.json`. To require strict failure handling instead of falling back to VT on local-scan errors, set `pompelmiFailureMode: "inconclusive"`.
+
+The daemon refuses to start if `pompelmiEnabled=true` and the configured socket is unreachable. Check `/api/health` for `localScanner.socketReachable`.
