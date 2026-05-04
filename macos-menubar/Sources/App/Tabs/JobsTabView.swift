@@ -299,13 +299,13 @@ private struct JobRow: View {
         let v = (job.vt_verdict ?? "").lowercased()
         switch v {
         case "infected", "malicious":
-            return VerdictPill(text: "Infected", variant: .red, size: .big, symbol: "exclamationmark.triangle.fill")
+            return VerdictPill(text: L.verdictBig(v), variant: .red, size: .big, symbol: "exclamationmark.triangle.fill")
         case "inconclusive":
-            return VerdictPill(text: "Inconclusive", variant: .orange, size: .big, symbol: "questionmark.circle.fill")
+            return VerdictPill(text: L.verdictBig("inconclusive"), variant: .orange, size: .big, symbol: "questionmark.circle.fill")
         case "oversized":
-            return VerdictPill(text: "Oversized", variant: .grey, size: .big, symbol: "arrow.down.circle")
+            return VerdictPill(text: L.verdictBig("oversized"), variant: .grey, size: .big, symbol: "arrow.down.circle")
         case "clean":
-            return VerdictPill(text: "Clean", variant: .green, size: .big, symbol: "checkmark.circle.fill")
+            return VerdictPill(text: L.verdictBig("clean"), variant: .green, size: .big, symbol: "checkmark.circle.fill")
         default: return nil
         }
     }
