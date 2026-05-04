@@ -24,6 +24,20 @@ struct SandboxSession: Codable, Identifiable, Equatable {
 class SandboxStore: ObservableObject {
     @Published var sessions: [SandboxSession] = []
     @Published var loadError: String? = nil
+    @Published var sandboxEnabled: Bool = false
+    @Published var tartInstalled: Bool = true
+    @Published var baseImagePresent: Bool = true
+
+    /// True only if every prerequisite for spawning a session is in place.
+    /// Used by the Jobs tab "Open in sandbox" button and the Sandbox tab "+ New session" button.
+    var canOpen: Bool {
+        sandboxEnabled && tartInstalled && baseImagePresent
+    }
+
+    /// Number of running/starting sessions, for the Sandbox tab count chip.
+    var activeCount: Int {
+        sessions.filter { $0.status == "running" || $0.status == "starting" }.count
+    }
 
     private let port: String
 
@@ -49,8 +63,18 @@ class SandboxStore: ObservableObject {
                     self.loadError = error.localizedDescription
                     return
                 }
-                guard let data,
-                      let decoded = try? JSONDecoder().decode([String: [SandboxSession]].self, from: data),
+                guard let data else {
+                    self.loadError = "no data"
+                    return
+                }
+                // Surface daemon error payloads (`{"error": "..."}`) verbatim.
+                if let errPayload = try? JSONDecoder().decode([String: String].self, from: data),
+                   let msg = errPayload["error"] {
+                    self.loadError = msg
+                    self.sessions = []
+                    return
+                }
+                guard let decoded = try? JSONDecoder().decode([String: [SandboxSession]].self, from: data),
                       let arr = decoded["sessions"]
                 else {
                     self.loadError = "decode failed"

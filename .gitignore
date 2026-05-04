@@ -154,3 +154,10 @@ dist
 
 # SvelteKit build / generate output
 .svelte-kit
+
+# File-sandbox personal / transient
+.claude/
+.superpowers/
+entities.json
+mempalace.yaml
+src/*.js

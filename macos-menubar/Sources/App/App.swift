@@ -8,13 +8,31 @@ struct FileSandboxMenuBarApp: App {
     @StateObject private var sandboxStore = SandboxStore()
     @State private var notifiedAtLaunch = false
 
+    @AppStorage("filesandbox.locale") private var localeRaw: String = AppLocale.auto.rawValue
+
     init() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { _, _ in }
+        // UNUserNotificationCenter.current() asserts when there's no CFBundleIdentifier
+        // (raw `swift run` from .build/). Skip request when running unbundled in dev.
+        if Bundle.main.bundleIdentifier != nil {
+            UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { _, _ in }
+        }
+    }
+
+    private var appLocale: AppLocale {
+        AppLocale(rawValue: localeRaw) ?? .auto
     }
 
     var body: some Scene {
         MenuBarExtra {
             MenuBarContentView(store: store, settingsStore: settingsStore, sandboxStore: sandboxStore)
+                .environment(\.locale, resolvedLocale(for: appLocale) ?? Locale.current)
+                .textSelection(.disabled)
+                .onAppear {
+                    sandboxStore.sandboxEnabled = settingsStore.sandboxEnabled
+                }
+                .onChange(of: settingsStore.sandboxEnabled) { _, new in
+                    sandboxStore.sandboxEnabled = new
+                }
         } label: {
             Image(systemName: store.iconName)
                 .symbolRenderingMode(.hierarchical)
@@ -26,17 +44,31 @@ struct FileSandboxMenuBarApp: App {
             guard !notifiedAtLaunch else { return }
             notifiedAtLaunch = true
             guard newMode != .active else { return }
-            let content = UNMutableNotificationContent()
-            content.title = "FileSandbox started in \(newMode.displayName)"
-            content.body = newMode == .scanPaused
-                ? "New files are quarantined but not scanned. Open the menu bar to resume."
-                : "New files are not being monitored. Open the menu bar to resume."
-            let req = UNNotificationRequest(identifier: "filesandbox.launch.mode", content: content, trigger: nil)
-            UNUserNotificationCenter.current().add(req)
+            postLaunchNotification(for: newMode)
         }
+    }
 
-        Settings {
-            SettingsView(store: settingsStore)
+    private func postLaunchNotification(for newMode: WatcherMode) {
+        let locale = resolvedLocale(for: appLocale) ?? Locale.current
+        let modeName: String = {
+            switch newMode {
+            case .active:              return String(localized: "mode.active",              locale: locale)
+            case .scanPaused:          return String(localized: "mode.scan_paused",          locale: locale)
+            case .monitoringDisabled:  return String(localized: "mode.monitoring_disabled",  locale: locale)
+            }
+        }()
+        let titleFormat = String(localized: "FileSandbox started in %@", locale: locale)
+        let bodyKey: String.LocalizationValue = newMode == .scanPaused
+            ? "New files are quarantined but not scanned. Open the menu bar to resume."
+            : "New files are not being monitored. Open the menu bar to resume."
+
+        let content = UNMutableNotificationContent()
+        content.title = String(format: titleFormat, modeName)
+        content.body  = String(localized: bodyKey, locale: locale)
+
+        let req = UNNotificationRequest(identifier: "filesandbox.launch.mode", content: content, trigger: nil)
+        if Bundle.main.bundleIdentifier != nil {
+            UNUserNotificationCenter.current().add(req)
         }
     }
 }
