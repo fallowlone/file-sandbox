@@ -28,6 +28,7 @@ export type JobRow = {
   final_path: string | null;
   status: JobStatus;
   vt_verdict: VirusVerdict | null;
+  pompelmi_verdict: "clean" | "malicious" | "error" | null;
   detail: string | null;
   created_at: number;
   updated_at: number;
@@ -61,14 +62,22 @@ export class JobStore {
         `CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs (created_at DESC)`,
       )
       .run();
+
+    // Idempotent column add for pompelmi_verdict
+    try {
+      this.db.exec("ALTER TABLE jobs ADD COLUMN pompelmi_verdict TEXT");
+    } catch (e) {
+      // Already exists — sqlite throws "duplicate column name"
+      if (!String(e).includes("duplicate column name")) throw e;
+    }
   }
 
   insertReceived(jobId: string, sourcePath: string, originalName: string) {
     const now = Date.now();
     this.db
       .prepare(
-        `INSERT INTO jobs (id, source_path, original_name, quarantine_path, final_path, status, vt_verdict, detail, created_at, updated_at)
-         VALUES (?, ?, ?, NULL, NULL, 'received', NULL, NULL, ?, ?)`,
+        `INSERT INTO jobs (id, source_path, original_name, quarantine_path, final_path, status, vt_verdict, pompelmi_verdict, detail, created_at, updated_at)
+         VALUES (?, ?, ?, NULL, NULL, 'received', NULL, NULL, NULL, ?, ?)`,
       )
       .run(jobId, sourcePath, originalName, now, now);
   }
@@ -108,6 +117,19 @@ export class JobStore {
     }
   }
 
+  setPompelmiVerdict(
+    jobId: string,
+    verdict: "clean" | "malicious" | "error",
+    detail?: string,
+  ): void {
+    const now = Date.now();
+    this.db
+      .prepare(
+        `UPDATE jobs SET pompelmi_verdict = ?, detail = COALESCE(?, detail), updated_at = ? WHERE id = ?`,
+      )
+      .run(verdict, detail ?? null, now, jobId);
+  }
+
   setRestored(jobId: string, finalPath: string) {
     const now = Date.now();
     this.db
@@ -129,7 +151,7 @@ export class JobStore {
   listRecent(limit = 100): JobRow[] {
     const rows = this.db
       .prepare(
-        `SELECT id, source_path, original_name, quarantine_path, final_path, status, vt_verdict, detail, created_at, updated_at
+        `SELECT id, source_path, original_name, quarantine_path, final_path, status, vt_verdict, pompelmi_verdict, detail, created_at, updated_at
          FROM jobs ORDER BY created_at DESC LIMIT ?`,
       )
       .all(limit) as JobRow[];
@@ -139,7 +161,7 @@ export class JobStore {
   getJob(jobId: string): JobRow | undefined {
     return this.db
       .prepare(
-        `SELECT id, source_path, original_name, quarantine_path, final_path, status, vt_verdict, detail, created_at, updated_at
+        `SELECT id, source_path, original_name, quarantine_path, final_path, status, vt_verdict, pompelmi_verdict, detail, created_at, updated_at
          FROM jobs WHERE id = ?`,
       )
       .get(jobId) as JobRow | undefined;
@@ -163,7 +185,7 @@ export class JobStore {
   listInconclusiveOlderThan(cutoffMs: number): JobRow[] {
     return this.db
       .prepare(
-        `SELECT id, source_path, original_name, quarantine_path, final_path, status, vt_verdict, detail, created_at, updated_at
+        `SELECT id, source_path, original_name, quarantine_path, final_path, status, vt_verdict, pompelmi_verdict, detail, created_at, updated_at
          FROM jobs
          WHERE status = 'quarantine_kept' AND vt_verdict = 'inconclusive' AND created_at < ?`,
       )
