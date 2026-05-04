@@ -247,7 +247,7 @@ class Watcher {
                 verdict: "infected",
                 message: `Local scanner: ${local.message}`,
               });
-              console.log(`pompelmi infected — kept in quarantine: ${quarantineFilePath}`);
+              console.log(`pompelmi infected - kept in quarantine: ${quarantineFilePath}`);
               return;
             }
 

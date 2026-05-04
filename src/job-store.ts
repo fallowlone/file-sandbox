@@ -67,7 +67,7 @@ export class JobStore {
     try {
       this.db.exec("ALTER TABLE jobs ADD COLUMN pompelmi_verdict TEXT");
     } catch (e) {
-      // Already exists — sqlite throws "duplicate column name"
+      // Already exists - sqlite throws "duplicate column name"
       if (!String(e).includes("duplicate column name")) throw e;
     }
   }

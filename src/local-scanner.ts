@@ -36,7 +36,7 @@ export class LocalScanner {
     }) as unknown as { scan: RawRunner };
   }
 
-  /** Test seam — bypass real pompelmi for unit tests. */
+  /** Test seam - bypass real pompelmi for unit tests. */
   static fromFakeRunner(run: RawRunner): LocalScanner {
     const inst = Object.create(LocalScanner.prototype) as LocalScanner;
     (inst as unknown as { scanner: { scan: RawRunner } }).scanner = { scan: run };
