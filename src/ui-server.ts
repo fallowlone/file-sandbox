@@ -141,8 +141,8 @@ export function startUiServer(
     const sandboxInfo = sandboxManager
       ? {
           enabled: true,
-          tartInstalled: true,
-          baseImagePresent: true,
+          tartInstalled: sandboxManager.getProbe().tartInstalled,
+          baseImagePresent: sandboxManager.getProbe().baseImagePresent,
           activeSessions: sandboxManager.listSessions({ limit: 500 })
             .filter((s) => s.status === "running" || s.status === "starting").length,
         }

@@ -36,6 +36,7 @@ export interface SandboxManagerOptions {
   idleTimeoutMinutes: number;
   networkDefault: boolean;
   allowedRoots: AllowedRoots;
+  probeInfo?: { tartInstalled: boolean; baseImagePresent: boolean };
 }
 
 export interface CreateSessionInput {
@@ -53,6 +54,7 @@ export class SandboxManager {
   private readonly idleTimeoutMinutes: number;
   private readonly networkDefault: boolean;
   private readonly allowedRoots: AllowedRoots;
+  private readonly probeInfo: { tartInstalled: boolean; baseImagePresent: boolean };
   private idleTimer: NodeJS.Timeout | null = null;
   private readonly children = new Map<string, ChildHandle>();
 
@@ -65,6 +67,7 @@ export class SandboxManager {
     this.idleTimeoutMinutes = opts.idleTimeoutMinutes;
     this.networkDefault = opts.networkDefault;
     this.allowedRoots = opts.allowedRoots;
+    this.probeInfo = opts.probeInfo ?? { tartInstalled: true, baseImagePresent: true };
   }
 
   static async probe(tart: TartCli, baseVm: string): Promise<{ tartInstalled: boolean; baseImagePresent: boolean }> {
@@ -175,6 +178,10 @@ export class SandboxManager {
     });
 
     return this.store.get(id)!;
+  }
+
+  getProbe(): { tartInstalled: boolean; baseImagePresent: boolean } {
+    return this.probeInfo;
   }
 
   listSessions(opts?: { limit?: number }): SandboxSession[] {
