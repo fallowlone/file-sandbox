@@ -22,6 +22,16 @@ mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$BINARY" "$MACOS_DIR/FileSandboxMenuBar"
 cp "AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
 
+# ── Localizations ────────────────────────────────────────────────────────────
+# Copy .lproj folders from the SwiftPM resource bundle into Contents/Resources/
+# so Bundle.main resolves Text(LocalizedStringKey) at runtime.
+SPM_BUNDLE=".build/release/FileSandboxMenuBar_FileSandboxMenuBar.bundle"
+if [ -d "$SPM_BUNDLE" ]; then
+  for lproj in "$SPM_BUNDLE"/*.lproj; do
+    [ -d "$lproj" ] && cp -R "$lproj" "$RESOURCES_DIR/"
+  done
+fi
+
 cat > "$APP/Contents/Info.plist" << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -45,6 +55,13 @@ cat > "$APP/Contents/Info.plist" << 'EOF'
     <true/>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleLocalizations</key>
+    <array>
+        <string>en</string>
+        <string>ru</string>
+    </array>
 </dict>
 </plist>
 EOF
