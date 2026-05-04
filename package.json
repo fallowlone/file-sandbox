@@ -6,8 +6,9 @@
   "main": "index.js",
   "types": "index.d.ts",
   "scripts": {
-    "start": "node src/index.ts",
-    "start:local": "node --env-file=.env src/index.ts"
+    "start": "node --experimental-strip-types src/index.ts",
+    "start:local": "node --experimental-strip-types --env-file=.env src/index.ts",
+    "test": "node --experimental-strip-types --test 'src/**/*.test.ts'"
   },
   "keywords": [],
   "author": "artem hrechuk <hrechuk.artem@gmail.com>",
