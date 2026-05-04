@@ -9,7 +9,11 @@ struct FileSandboxMenuBarApp: App {
     @State private var notifiedAtLaunch = false
 
     init() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { _, _ in }
+        // UNUserNotificationCenter.current() asserts when there's no CFBundleIdentifier
+        // (raw `swift run` from .build/). Skip request when running unbundled in dev.
+        if Bundle.main.bundleIdentifier != nil {
+            UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { _, _ in }
+        }
     }
 
     var body: some Scene {
@@ -32,7 +36,9 @@ struct FileSandboxMenuBarApp: App {
                 ? "New files are quarantined but not scanned. Open the menu bar to resume."
                 : "New files are not being monitored. Open the menu bar to resume."
             let req = UNNotificationRequest(identifier: "filesandbox.launch.mode", content: content, trigger: nil)
-            UNUserNotificationCenter.current().add(req)
+            if Bundle.main.bundleIdentifier != nil {
+                UNUserNotificationCenter.current().add(req)
+            }
         }
     }
 }
