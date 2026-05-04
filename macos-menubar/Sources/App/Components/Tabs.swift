@@ -24,7 +24,6 @@ struct AppTabs: View {
 
     var body: some View {
         HStack(spacing: 3) {
-            Spacer(minLength: 0)
             ForEach(AppTab.allCases) { tab in
                 let isOn = selection == tab.rawValue
                 Button {
@@ -40,7 +39,7 @@ struct AppTabs: View {
                                 .foregroundColor(Color.secondary.opacity(0.7))
                         }
                     }
-                    .padding(.horizontal, 12)
+                    .frame(maxWidth: .infinity)
                     .padding(.vertical, 5)
                     .background(
                         Group {
@@ -56,9 +55,7 @@ struct AppTabs: View {
                 }
                 .buttonStyle(.plain)
             }
-            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity)
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(Theme.subtleBg)
