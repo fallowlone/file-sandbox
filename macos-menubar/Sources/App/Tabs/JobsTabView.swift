@@ -60,7 +60,7 @@ struct JobsTabView: View {
             Image(systemName: "tray.and.arrow.down")
                 .font(.system(size: 26))
                 .foregroundColor(.secondary)
-            Text("Watching \(settingsStore.watchPath.isEmpty ? "—" : settingsStore.watchPath)")
+            Text("Watching \(settingsStore.watchPath.isEmpty ? "-" : settingsStore.watchPath)")
                 .font(.system(size: 12))
                 .foregroundColor(.secondary)
                 .lineLimit(1)
@@ -228,7 +228,7 @@ private struct JobRow: View {
             HStack(spacing: 6) {
                 EngineCard(
                     label: "VirusTotal",
-                    value: job.vt_verdict ?? "—",
+                    value: job.vt_verdict ?? "-",
                     status: engineStatus(for: job.vt_verdict)
                 )
             }

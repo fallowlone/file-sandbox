@@ -59,7 +59,7 @@ struct SettingsTabView: View {
                     AppSwitch(isOn: bind($settingsStore.vtEnabled))
                 }
                 if !settingsStore.vtEnabled && !settingsStore.pompelmiEnabled {
-                    Text("No active scanners — every new file will be quarantined as inconclusive.")
+                    Text("No active scanners - every new file will be quarantined as inconclusive.")
                         .font(.system(size: 10))
                         .foregroundColor(Theme.verdictRedFg)
                         .padding(.horizontal, 14)
