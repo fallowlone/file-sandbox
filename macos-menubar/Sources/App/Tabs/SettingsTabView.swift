@@ -4,6 +4,7 @@ import Combine
 struct SettingsTabView: View {
     @ObservedObject var settingsStore: SettingsStore
     @ObservedObject var store: JobStore
+    @AppStorage("filesandbox.locale") private var localeRaw: String = AppLocale.auto.rawValue
 
     /// Debounced auto-save: any @Published change triggers `save()` 400 ms later.
     @State private var saveTimer: AnyCancellable? = nil
@@ -129,6 +130,16 @@ struct SettingsTabView: View {
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 11, design: .monospaced))
                         .frame(width: 180)
+                }
+                SettingRow(label: "Language") {
+                    Picker("", selection: $localeRaw) {
+                        ForEach(AppLocale.allCases) { loc in
+                            Text(loc.displayName).tag(loc.rawValue)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 180)
+                    .labelsHidden()
                 }
             }
         }
