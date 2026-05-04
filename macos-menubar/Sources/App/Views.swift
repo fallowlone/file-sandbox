@@ -6,6 +6,7 @@ struct JobRowView: View {
     let onCancel: () -> Void
     let onDelete: () -> Void
     let onRestore: () -> Void
+    let sandboxStore: SandboxStore
 
     var statusIcon: (name: String, color: Color) {
         switch job.status {
@@ -99,6 +100,15 @@ struct JobRowView: View {
                             .foregroundColor(verdict == "oversized" ? .orange : .red)
                             .clipShape(RoundedRectangle(cornerRadius: 4))
                     }
+                    Button(action: {
+                        sandboxStore.create(filePath: job.final_path ?? "", sourceJobId: job.id, network: false) { _ in }
+                    }) {
+                        Image(systemName: "play.circle")
+                            .font(.system(size: 12))
+                            .foregroundColor(.blue)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Open in sandbox")
                     Button(action: onRestore) {
                         Image(systemName: "arrow.uturn.backward.circle")
                             .font(.system(size: 12))
@@ -172,6 +182,7 @@ struct JobRowView: View {
 struct MenuBarContentView: View {
     @ObservedObject var store: JobStore
     @ObservedObject var settingsStore: SettingsStore
+    @ObservedObject var sandboxStore: SandboxStore
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
@@ -179,6 +190,8 @@ struct MenuBarContentView: View {
             header
             Divider()
             jobList
+            Divider()
+            SandboxView(store: sandboxStore)
             Divider()
             footer
         }
@@ -332,7 +345,8 @@ struct MenuBarContentView: View {
                             job: job,
                             onCancel: { store.cancelJob(job.id) },
                             onDelete: { store.deleteFile(job.id) },
-                            onRestore: { store.restoreFile(job.id) }
+                            onRestore: { store.restoreFile(job.id) },
+                            sandboxStore: sandboxStore
                         )
                         if job.id != visible.last?.id {
                             Divider().padding(.leading, 42)
