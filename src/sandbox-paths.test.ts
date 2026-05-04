@@ -2,10 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { validateSandboxSourcePath } from "./sandbox-paths.ts";
 
-test("rejects path traversal", () => {
+test("rejects path traversal that escapes all allowed roots", () => {
+  // Resolves to /etc/passwd, which is outside watchPath, quarantinePath, and homeDir.
   assert.throws(
     () =>
-      validateSandboxSourcePath("/Users/me/watch/../etc/passwd", {
+      validateSandboxSourcePath("/Users/me/watch/../../../etc/passwd", {
         watchPath: "/Users/me/watch",
         quarantinePath: "/Users/me/q",
         homeDir: "/Users/me",
