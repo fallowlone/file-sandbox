@@ -6,7 +6,7 @@ struct SettingsView: View {
     @State private var showVtKey = false
 
     enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
-        case paths, network, daemon, scan, virustotal, watcher, scanners
+        case paths, network, daemon, scan, virustotal, watcher, scanners, sandbox
         var id: String { rawValue }
 
         var title: String {
@@ -18,6 +18,7 @@ struct SettingsView: View {
             case .virustotal: return "VirusTotal"
             case .watcher: return "Watcher"
             case .scanners: return "Scanners"
+            case .sandbox: return "Sandbox"
             }
         }
 
@@ -30,6 +31,7 @@ struct SettingsView: View {
             case .virustotal: return "API key used to scan files against VirusTotal."
             case .watcher:    return "Watcher mode controls file handling behavior."
             case .scanners:   return "Configure local and cloud virus scanning."
+            case .sandbox:    return "Tart VM sandbox for isolated, reproducible analysis."
             }
         }
 
@@ -42,6 +44,7 @@ struct SettingsView: View {
             case .virustotal: return "shield.lefthalf.filled"
             case .watcher:    return "clock.fill"
             case .scanners:   return "magnifyingglass.circle.fill"
+            case .sandbox:    return "square.fill"
             }
         }
 
@@ -54,6 +57,7 @@ struct SettingsView: View {
             case .virustotal: return .red
             case .watcher:    return .purple
             case .scanners:   return .green
+            case .sandbox:    return .cyan
             }
         }
     }
@@ -133,6 +137,7 @@ struct SettingsView: View {
                     case .virustotal: virusTotalContent
                     case .watcher:    watcherContent
                     case .scanners:   scannersContent
+                    case .sandbox:    sandboxContent
                     }
                 }
             }
@@ -468,6 +473,42 @@ struct SettingsView: View {
                             .foregroundColor(.red)
                     }
                 }
+            }
+        }
+    }
+
+    private var sandboxContent: some View {
+        card {
+            Toggle("Enable sandbox", isOn: $store.sandboxEnabled)
+                .toggleStyle(.switch)
+            if store.sandboxEnabled {
+                stackedTextField(title: "Base VM name",
+                               text: $store.sandboxBaseVm,
+                               prompt: "filesandbox-base")
+                divider
+                rowLabel("Idle timeout") {
+                    Stepper(value: $store.sandboxIdleTimeoutMinutes, in: 5...10080, step: 5) {
+                        Text("\(store.sandboxIdleTimeoutMinutes) min")
+                            .monospacedDigit()
+                            .font(.body.weight(.medium))
+                            .frame(minWidth: 60, alignment: .trailing)
+                    }
+                }
+                divider
+                Toggle("Network ON by default", isOn: $store.sandboxNetworkDefault)
+                    .toggleStyle(.switch)
+                divider
+                rowLabel("Output retention") {
+                    Stepper(value: $store.sandboxOutRetentionDays, in: 0...90, step: 1) {
+                        Text("\(store.sandboxOutRetentionDays) day\(store.sandboxOutRetentionDays == 1 ? "" : "s")")
+                            .monospacedDigit()
+                            .font(.body.weight(.medium))
+                            .frame(minWidth: 60, alignment: .trailing)
+                    }
+                }
+                Text("Run \"brew install cirruslabs/cli/tart\" and \"tart pull ghcr.io/cirruslabs/macos-sequoia-base:latest\" before enabling.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
         }
     }

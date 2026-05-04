@@ -21,6 +21,11 @@ struct DaemonConfig: Codable {
     var pompelmiEnabled: Bool?
     var pompelmiSocketPath: String?
     var pompelmiFailureMode: String?
+    var sandboxEnabled: Bool?
+    var sandboxBaseVm: String?
+    var sandboxIdleTimeoutMinutes: Int?
+    var sandboxNetworkDefault: Bool?
+    var sandboxOutRetentionDays: Int?
 }
 
 enum DaemonLocalStorage {
@@ -57,6 +62,11 @@ class SettingsStore: ObservableObject {
     @Published var pompelmiEnabled: Bool = true
     @Published var pompelmiSocketPath: String = "/tmp/clamd.sock"
     @Published var pompelmiFailureMode: String = "bypass"
+    @Published var sandboxEnabled: Bool = false
+    @Published var sandboxBaseVm: String = "filesandbox-base"
+    @Published var sandboxIdleTimeoutMinutes: Int = 240
+    @Published var sandboxNetworkDefault: Bool = false
+    @Published var sandboxOutRetentionDays: Int = 7
 
     // Stored locally — no daemon required (used when daemon is offline)
     @Published var daemonProjectPath: String = ""
@@ -133,6 +143,11 @@ class SettingsStore: ObservableObject {
                 self.pompelmiEnabled = decoded.pompelmiEnabled ?? true
                 self.pompelmiSocketPath = decoded.pompelmiSocketPath ?? "/tmp/clamd.sock"
                 self.pompelmiFailureMode = decoded.pompelmiFailureMode ?? "bypass"
+                self.sandboxEnabled = decoded.sandboxEnabled ?? false
+                self.sandboxBaseVm = decoded.sandboxBaseVm ?? "filesandbox-base"
+                self.sandboxIdleTimeoutMinutes = decoded.sandboxIdleTimeoutMinutes ?? 240
+                self.sandboxNetworkDefault = decoded.sandboxNetworkDefault ?? false
+                self.sandboxOutRetentionDays = decoded.sandboxOutRetentionDays ?? 7
             }
         }.resume()
     }
@@ -163,6 +178,11 @@ class SettingsStore: ObservableObject {
             "pompelmiEnabled": pompelmiEnabled,
             "pompelmiSocketPath": pompelmiSocketPath,
             "pompelmiFailureMode": pompelmiFailureMode,
+            "sandboxEnabled": sandboxEnabled,
+            "sandboxBaseVm": sandboxBaseVm,
+            "sandboxIdleTimeoutMinutes": sandboxIdleTimeoutMinutes,
+            "sandboxNetworkDefault": sandboxNetworkDefault,
+            "sandboxOutRetentionDays": sandboxOutRetentionDays,
         ]
         if !vtApiKey.isEmpty { body["vtApiKey"] = vtApiKey }
 
