@@ -178,7 +178,7 @@ class Watcher {
         const fullPath = join(this.watchPath, filename);
         if (this.restoringPaths.has(fullPath)) return;
         if (this.processingPaths.has(fullPath)) return;
-        // Skip directories — only lock actual files
+        // Skip directories - only lock actual files
         try {
           const st = require("fs").statSync(fullPath);
           if (st.isDirectory()) return;
@@ -324,7 +324,7 @@ class Watcher {
             };
             this.jobStore?.setScanResult(jobId, result);
             console.log(
-              `Oversized — kept in quarantine: ${quarantineFilePath}`,
+              `Oversized - kept in quarantine: ${quarantineFilePath}`,
             );
             return;
           }
@@ -382,12 +382,12 @@ class Watcher {
           ) {
             await cacheStore(quarantineFilePath, result.verdict);
           }
-          console.log(`VirusTotal: ${result.verdict} — ${result.message}`);
+          console.log(`VirusTotal: ${result.verdict} - ${result.message}`);
 
           if (result.message === "Cancelled by user") {
             this.jobStore?.cancelJob(jobId);
             console.log(
-              `Scan cancelled — keeping in quarantine: ${quarantineFilePath}`,
+              `Scan cancelled - keeping in quarantine: ${quarantineFilePath}`,
             );
             return;
           }
