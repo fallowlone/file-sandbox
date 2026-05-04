@@ -3,7 +3,7 @@ import SwiftUI
 /// Single label + control row for the Settings tab.
 /// Vertical rhythm 9 pt, horizontal 14 pt. Label flexes; control is flush right.
 struct SettingRow<Control: View>: View {
-    let label: String
+    let label: LocalizedStringKey
     var indent: CGFloat = 0
     @ViewBuilder let control: () -> Control
 
@@ -24,9 +24,10 @@ struct SettingRow<Control: View>: View {
 
 /// Group header for the Settings tab. Always visible (not collapsible per spec).
 struct SettingGroupHeader: View {
-    let title: String
+    let title: LocalizedStringKey
     var body: some View {
-        Text(title.uppercased())
+        Text(title)
+            .textCase(.uppercase)
             .font(.system(size: 10, weight: .semibold))
             .tracking(0.5)
             .foregroundColor(.secondary)

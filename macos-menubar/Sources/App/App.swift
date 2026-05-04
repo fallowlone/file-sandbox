@@ -26,6 +26,13 @@ struct FileSandboxMenuBarApp: App {
         MenuBarExtra {
             MenuBarContentView(store: store, settingsStore: settingsStore, sandboxStore: sandboxStore)
                 .environment(\.locale, resolvedLocale(for: appLocale) ?? Locale.current)
+                .textSelection(.disabled)
+                .onAppear {
+                    sandboxStore.sandboxEnabled = settingsStore.sandboxEnabled
+                }
+                .onChange(of: settingsStore.sandboxEnabled) { _, new in
+                    sandboxStore.sandboxEnabled = new
+                }
         } label: {
             Image(systemName: store.iconName)
                 .symbolRenderingMode(.hierarchical)
