@@ -16,8 +16,8 @@ struct StatusChip: View {
         }
     }
 
-    private var label: String {
-        isConnected ? mode.displayName : "Disconnected"
+    private var label: LocalizedStringKey {
+        isConnected ? mode.displayKey : "Disconnected"
     }
 
     var body: some View {
@@ -27,7 +27,7 @@ struct StatusChip: View {
                     onSelect(m)
                 } label: {
                     Label {
-                        Text(m.displayName)
+                        Text(m.displayKey)
                     } icon: {
                         if mode == m { Image(systemName: "checkmark") }
                     }
