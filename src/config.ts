@@ -5,6 +5,7 @@ import {
   encryptConfigJson,
   isEncryptedConfigPayload,
 } from "./config-crypto.ts";
+import { parseMode, type WatcherMode } from "./watcher-mode.ts";
 
 export interface RawConfig {
   vtApiKey?: string;
@@ -30,6 +31,9 @@ export interface RawConfig {
   pompelmiSocketPath?: string;
   /** What to do when pompelmi returns ScanError. Defaults to "bypass". */
   pompelmiFailureMode?: "bypass" | "inconclusive";
+  watcherMode?: WatcherMode | string;
+  /** Run VirusTotal scan stage. Defaults to true. */
+  vtEnabled?: boolean;
 }
 
 const configPath = join(process.cwd(), "config.json");
@@ -171,5 +175,7 @@ export const config = {
     const v = (file.pompelmiFailureMode ?? process.env.POMPELMI_FAILURE_MODE ?? "bypass").trim().toLowerCase();
     return v === "inconclusive" ? "inconclusive" : "bypass";
   })(),
+  watcherMode: parseMode(file.watcherMode ?? process.env.WATCHER_MODE),
+  vtEnabled: file.vtEnabled ?? envBool("VT_ENABLED", true),
   configEncryptedAtRest: Boolean(masterKeyFromEnv()),
 };
