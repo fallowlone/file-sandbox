@@ -20,7 +20,7 @@ struct SettingsTabView: View {
                         Text("Off").tag(WatcherMode.monitoringDisabled)
                     }
                     .pickerStyle(.segmented)
-                    .frame(width: 180)
+                    .frame(width: 220)
                     .onChange(of: store.mode) { _, m in store.setMode(m) }
                 }
                 SettingRow(label: "Watch path") {
@@ -52,8 +52,9 @@ struct SettingsTabView: View {
                             Text("Bypass to VT").tag("bypass")
                             Text("Mark inconclusive").tag("inconclusive")
                         }
-                        .pickerStyle(.segmented)
-                        .frame(width: 180)
+                        .pickerStyle(.menu)
+                        .frame(width: 220)
+                        .labelsHidden()
                     }
                 }
                 SettingRow(label: "VirusTotal") {
