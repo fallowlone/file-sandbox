@@ -6,6 +6,7 @@ import { config } from "./config.ts";
 import FileMover from "./file-mover.ts";
 import { assertSafeHttpHost } from "./http-host-guard.ts";
 import { startInconclusiveSweeper } from "./inconclusive-sweeper.ts";
+import { LocalScanner } from "./local-scanner.ts";
 
 if (!config.vtApiKey)
   throw new Error("vtApiKey not set (config.json or VT_API_KEY)");
@@ -13,6 +14,22 @@ if (!config.watchPath)
   throw new Error("watchPath not set (config.json or WATCH_PATH)");
 if (!config.quarantinePath)
   throw new Error("quarantinePath not set (config.json or QUARANTINE_PATH)");
+
+let localScanner: LocalScanner | null = null;
+if (config.pompelmiEnabled) {
+  try {
+    await LocalScanner.probe(config.pompelmiSocketPath);
+    localScanner = new LocalScanner({ socketPath: config.pompelmiSocketPath });
+    console.log(`[pompelmi] enabled, socket=${config.pompelmiSocketPath}`);
+  } catch (e) {
+    console.error(
+      `[pompelmi] enabled but probe failed (${(e as Error).message}). Refusing to start. Disable with pompelmiEnabled=false or fix clamd.`,
+    );
+    process.exit(1);
+  }
+} else {
+  console.log("[pompelmi] disabled by config");
+}
 
 const jobStore = new JobStore(config.databasePath);
 const fileMover = new FileMover(config.quarantinePath);
@@ -28,6 +45,8 @@ const watcher = new Watcher(
     maxScanBytes: config.maxScanBytes,
     maxConcurrentScans: config.maxConcurrentScans,
     useSeparateVtProcess: config.useSeparateVtProcess,
+    localScanner,
+    pompelmiFailureMode: config.pompelmiFailureMode,
   },
 );
 watcher.start();

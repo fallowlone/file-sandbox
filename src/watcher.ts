@@ -10,6 +10,7 @@ import FileMover from "./file-mover.ts";
 import FilePermissions from "./file-permissions.ts";
 import VirusChecker from "./virus-checker.ts";
 import type { JobStore } from "./job-store.ts";
+import type { LocalScanner } from "./local-scanner.ts";
 import { Semaphore } from "./semaphore.ts";
 import { metrics } from "./metrics.ts";
 
@@ -56,6 +57,10 @@ export interface WatcherOptions {
   maxScanBytes?: number;
   maxConcurrentScans?: number;
   useSeparateVtProcess?: boolean;
+  /** When provided AND pompelmiEnabled, runs upstream of VT. */
+  localScanner?: LocalScanner | null;
+  /** Behavior on pompelmi ScanError. */
+  pompelmiFailureMode?: "bypass" | "inconclusive";
 }
 
 class Watcher {
@@ -73,6 +78,8 @@ class Watcher {
   private readonly maxScanBytes: number;
   private readonly scanSemaphore: Semaphore;
   private paused = false;
+  private readonly localScanner: LocalScanner | null;
+  private readonly pompelmiFailureMode: "bypass" | "inconclusive";
 
   constructor(
     watchPath: string,
@@ -97,6 +104,8 @@ class Watcher {
     });
     this.filePermissions = new FilePermissions();
     this.jobStore = jobStore;
+    this.localScanner = opts?.localScanner ?? null;
+    this.pompelmiFailureMode = opts?.pompelmiFailureMode ?? "bypass";
   }
 
   /** Skip re-scan when restoring from API or clean pipeline. */
@@ -220,6 +229,42 @@ class Watcher {
           );
 
           this.jobStore?.setScanning(jobId);
+
+          // Local pompelmi stage (defense-in-depth)
+          if (this.localScanner) {
+            const localController = new AbortController();
+            this.scanControllers.set(jobId, localController);
+            let local;
+            try {
+              local = await this.localScanner.check(quarantineFilePath, localController.signal);
+            } finally {
+              this.scanControllers.delete(jobId);
+            }
+            this.jobStore?.setPompelmiVerdict(jobId, local.verdict, local.message);
+
+            if (local.verdict === "malicious") {
+              this.jobStore?.setScanResult(jobId, {
+                verdict: "infected",
+                message: `Local scanner: ${local.message}`,
+              });
+              console.log(`pompelmi infected — kept in quarantine: ${quarantineFilePath}`);
+              return;
+            }
+
+            if (local.verdict === "error") {
+              if (this.pompelmiFailureMode === "inconclusive") {
+                this.jobStore?.setScanResult(jobId, {
+                  verdict: "inconclusive",
+                  message: `Local scanner failed: ${local.message}`,
+                });
+                console.warn(`pompelmi error (inconclusive mode): ${local.message}`);
+                return;
+              }
+              console.warn(`pompelmi error (bypass): ${local.message}`);
+              // Fall through to VT.
+            }
+            // verdict === 'clean' or bypassed error → fall through to VT
+          }
 
           const st = await statAsync(quarantineFilePath);
           if (st.size > this.maxScanBytes) {
