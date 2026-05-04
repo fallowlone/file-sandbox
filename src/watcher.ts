@@ -11,6 +11,7 @@ import FilePermissions from "./file-permissions.ts";
 import VirusChecker from "./virus-checker.ts";
 import type { JobStore } from "./job-store.ts";
 import type { LocalScanner } from "./local-scanner.ts";
+import type { WatcherMode } from "./watcher-mode.ts";
 import { Semaphore } from "./semaphore.ts";
 import { metrics } from "./metrics.ts";
 
@@ -61,6 +62,12 @@ export interface WatcherOptions {
   localScanner?: LocalScanner | null;
   /** Behavior on pompelmi ScanError. */
   pompelmiFailureMode?: "bypass" | "inconclusive";
+  /** Initial mode. Defaults to "active". */
+  initialMode?: WatcherMode;
+  /** Called when setMode persists a change (write to config). */
+  onModeChange?: (mode: WatcherMode) => void;
+  /** Whether VirusTotal scan stage runs. */
+  vtEnabled?: boolean;
 }
 
 class Watcher {
@@ -77,7 +84,9 @@ class Watcher {
   private readonly watchRecursive: boolean;
   private readonly maxScanBytes: number;
   private readonly scanSemaphore: Semaphore;
-  private paused = false;
+  private mode: WatcherMode = "active";
+  private readonly onModeChange?: (mode: WatcherMode) => void;
+  private readonly vtEnabled: boolean;
   private readonly localScanner: LocalScanner | null;
   private readonly pompelmiFailureMode: "bypass" | "inconclusive";
 
@@ -104,6 +113,9 @@ class Watcher {
     });
     this.filePermissions = new FilePermissions();
     this.jobStore = jobStore;
+    this.mode = opts?.initialMode ?? "active";
+    this.onModeChange = opts?.onModeChange;
+    this.vtEnabled = opts?.vtEnabled ?? true;
     this.localScanner = opts?.localScanner ?? null;
     this.pompelmiFailureMode = opts?.pompelmiFailureMode ?? "bypass";
   }
@@ -113,17 +125,27 @@ class Watcher {
     this.restoringPaths.add(destPath);
   }
 
-  pause() {
-    this.paused = true;
+  getMode(): WatcherMode {
+    return this.mode;
   }
 
-  resume() {
-    this.paused = false;
+  setMode(next: WatcherMode): void {
+    if (next === this.mode) return;
+    const prev = this.mode;
+    this.mode = next;
+    if (prev === "active" && next !== "active") {
+      for (const c of this.scanControllers.values()) {
+        c.abort();
+      }
+    }
+    this.onModeChange?.(next);
   }
 
-  get isPaused(): boolean {
-    return this.paused;
-  }
+  /** @deprecated kept only for legacy /api/watcher/pause callers */
+  pause(): void { this.setMode("scan_paused"); }
+  /** @deprecated kept only for legacy /api/watcher/resume callers */
+  resume(): void { this.setMode("active"); }
+  get isPaused(): boolean { return this.mode !== "active"; }
 
   cancel(jobId: string) {
     const controller = this.scanControllers.get(jobId);
@@ -148,7 +170,7 @@ class Watcher {
       this.watchPath,
       { recursive: rawRecursive },
       (event, filename) => {
-        if (this.paused) return;
+        if (this.mode === "monitoring_disabled") return;
         if (!filename || event !== "rename") return;
         if ((this.ignored as string[]).some((ign) => filename.endsWith(ign)))
           return;
@@ -180,7 +202,7 @@ class Watcher {
     });
 
     const handleFile = async (filepath: string) => {
-      if (this.paused) return;
+      if (this.mode === "monitoring_disabled") return;
       if (isBrowserTemp(filepath)) return;
 
       const fname = basename(filepath);
@@ -228,6 +250,25 @@ class Watcher {
             `Watching: path=${filepath} quarantine=${quarantineFilePath} originalName=${originalBaseName}`,
           );
 
+          if (this.mode === "scan_paused") {
+            this.jobStore?.setScanResult(jobId, {
+              verdict: "inconclusive",
+              message: "Scanning paused at intake",
+            });
+            console.log(`[mode=scan_paused] skipped scan, kept quarantined: ${quarantineFilePath}`);
+            return;
+          }
+
+          const noScanners = !this.localScanner && !this.vtEnabled;
+          if (noScanners) {
+            this.jobStore?.setScanResult(jobId, {
+              verdict: "inconclusive",
+              message: "No active scanners - kept in quarantine",
+            });
+            console.log(`[no-scanners] kept quarantined: ${quarantineFilePath}`);
+            return;
+          }
+
           this.jobStore?.setScanning(jobId);
 
           // Local pompelmi stage (defense-in-depth)
@@ -264,6 +305,15 @@ class Watcher {
               // Fall through to VT.
             }
             // verdict === 'clean' or bypassed error → fall through to VT
+          }
+
+          if (!this.vtEnabled) {
+            this.jobStore?.setScanResult(jobId, {
+              verdict: "inconclusive",
+              message: "VT disabled - no cloud scan ran",
+            });
+            console.log(`[vtEnabled=false] kept quarantined: ${quarantineFilePath}`);
+            return;
           }
 
           const st = await statAsync(quarantineFilePath);
