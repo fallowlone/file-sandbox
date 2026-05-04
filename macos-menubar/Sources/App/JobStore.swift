@@ -1,6 +1,28 @@
 import Foundation
 import Darwin
 
+enum WatcherMode: String, Codable, CaseIterable {
+    case active
+    case scanPaused = "scan_paused"
+    case monitoringDisabled = "monitoring_disabled"
+
+    var displayName: String {
+        switch self {
+        case .active: return "Active"
+        case .scanPaused: return "Scanning paused"
+        case .monitoringDisabled: return "Monitoring disabled"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .active: return "play.circle.fill"
+        case .scanPaused: return "pause.circle.fill"
+        case .monitoringDisabled: return "eye.slash.fill"
+        }
+    }
+}
+
 struct SandboxJob: Codable, Identifiable, Equatable {
     let id: String
     let original_name: String
@@ -14,6 +36,7 @@ struct SandboxJob: Codable, Identifiable, Equatable {
 struct JobsResponse: Codable {
     let jobs: [SandboxJob]
     let paused: Bool?
+    let mode: String?
 }
 
 enum ClientAuthStorage {
@@ -27,9 +50,11 @@ enum ClientAuthStorage {
 class JobStore: ObservableObject {
     @Published var jobs: [SandboxJob] = []
     @Published var isConnected = false
-    @Published var isPaused = false
+    @Published var mode: WatcherMode = .active
     @Published var lastActionError: String? = nil
     @Published var daemonLaunchError: String? = nil
+
+    var isPaused: Bool { mode != .active }
 
     private var timer: Timer?
     private let apiURL: URL
@@ -212,14 +237,17 @@ class JobStore: ObservableObject {
         performAction(url: url, method: "POST")
     }
 
-    func pauseWatcher() {
-        guard let url = URL(string: "http://127.0.0.1:\(port)/api/watcher/pause") else { return }
-        performAction(url: url, method: "POST")
-    }
-
-    func resumeWatcher() {
-        guard let url = URL(string: "http://127.0.0.1:\(port)/api/watcher/resume") else { return }
-        performAction(url: url, method: "POST")
+    func setMode(_ next: WatcherMode) {
+        guard let url = URL(string: "http://127.0.0.1:\(port)/api/watcher/mode") else { return }
+        var req = authorizedRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["mode": next.rawValue])
+        URLSession.shared.dataTask(with: req) { [weak self] _, _, error in
+            DispatchQueue.main.async {
+                if error == nil { self?.mode = next }
+            }
+        }.resume()
     }
 
     func fetch() {
@@ -258,10 +286,7 @@ class JobStore: ObservableObject {
                     if self.jobs != decoded.jobs {
                         self.jobs = decoded.jobs
                     }
-                    let paused = decoded.paused ?? false
-                    if self.isPaused != paused {
-                        self.isPaused = paused
-                    }
+                    self.mode = decoded.mode.flatMap(WatcherMode.init(rawValue:)) ?? (decoded.paused == true ? .scanPaused : .active)
                     self.lastActionError = nil
                     self.rescheduleTimer(interval: self.targetPollInterval)
                 }
