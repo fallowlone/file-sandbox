@@ -114,12 +114,24 @@ export function startUiServer(
   const app = express();
   app.use(express.json({ limit: "512kb" }));
 
-  app.get("/api/health", (_req, res) => {
+  app.get("/api/health", async (_req, res) => {
     const scanning = store
       .listRecent(500)
       .filter(
         (j) => j.status === "scanning" || j.status === "in_quarantine",
       ).length;
+
+    const localScannerInfo = await (async () => {
+      if (!config.pompelmiEnabled) return { enabled: false, socketReachable: false };
+      try {
+        const { LocalScanner } = await import("./local-scanner.ts");
+        await LocalScanner.probe(config.pompelmiSocketPath);
+        return { enabled: true, socketReachable: true };
+      } catch {
+        return { enabled: true, socketReachable: false };
+      }
+    })();
+
     res.json({
       ok: true,
       uptimeSec: Math.floor((Date.now() - metrics.startedAt) / 1000),
@@ -128,6 +140,7 @@ export function startUiServer(
       lastError: metrics.lastError,
       apiAuthEnabled: Boolean(config.apiToken?.trim()),
       configEncryptedAtRest: config.configEncryptedAtRest,
+      localScanner: localScannerInfo,
     });
   });
 
