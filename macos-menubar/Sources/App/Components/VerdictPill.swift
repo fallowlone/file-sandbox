@@ -6,7 +6,7 @@ struct VerdictPill: View {
     enum Size { case mini, big }
     enum Variant { case red, orange, green, blue, grey }
 
-    let text: String
+    let text: LocalizedStringKey
     let variant: Variant
     let size: Size
     var symbol: String? = nil
@@ -43,23 +43,23 @@ extension VerdictPill {
     /// Map a job's `vt_verdict` string + status to a pill variant + label.
     static func forJobVerdict(verdict: String?, status: String) -> VerdictPill? {
         if status == "scanning" || status == "received" {
-            return VerdictPill(text: "scanning", variant: .blue, size: .mini, symbol: "hourglass")
+            return VerdictPill(text: L.verdict("scanning"), variant: .blue, size: .mini, symbol: "hourglass")
         }
         if status == "in_quarantine" {
-            return VerdictPill(text: "queued", variant: .blue, size: .mini, symbol: "tray")
+            return VerdictPill(text: L.verdict("queued"), variant: .blue, size: .mini, symbol: "tray")
         }
         guard let v = verdict?.lowercased() else { return nil }
         switch v {
         case "infected", "malicious":
-            return VerdictPill(text: "infected", variant: .red, size: .mini, symbol: "exclamationmark.triangle.fill")
+            return VerdictPill(text: L.verdict(v), variant: .red, size: .mini, symbol: "exclamationmark.triangle.fill")
         case "inconclusive", "unclear":
-            return VerdictPill(text: "inconclusive", variant: .orange, size: .mini, symbol: "questionmark.circle.fill")
+            return VerdictPill(text: L.verdict("inconclusive"), variant: .orange, size: .mini, symbol: "questionmark.circle.fill")
         case "oversized":
-            return VerdictPill(text: "oversized", variant: .grey, size: .mini, symbol: "arrow.down.circle")
+            return VerdictPill(text: L.verdict("oversized"), variant: .grey, size: .mini, symbol: "arrow.down.circle")
         case "clean":
-            return VerdictPill(text: "clean", variant: .green, size: .mini, symbol: "checkmark.circle.fill")
+            return VerdictPill(text: L.verdict("clean"), variant: .green, size: .mini, symbol: "checkmark.circle.fill")
         default:
-            return VerdictPill(text: v, variant: .grey, size: .mini)
+            return VerdictPill(text: LocalizedStringKey(v), variant: .grey, size: .mini)
         }
     }
 }
@@ -70,11 +70,11 @@ struct SessionStatePill: View {
     let status: String
     var body: some View {
         switch status {
-        case "running":   VerdictPill(text: "running",   variant: .green, size: .mini)
-        case "starting":  VerdictPill(text: "starting",  variant: .blue,  size: .mini)
-        case "stopped":   VerdictPill(text: "stopped",   variant: .red,   size: .mini)
-        case "failed":    VerdictPill(text: "failed",    variant: .red,   size: .mini)
-        case "discarded": VerdictPill(text: "discarded", variant: .grey,  size: .mini)
+        case "running":   VerdictPill(text: L.session("running"),   variant: .green, size: .mini)
+        case "starting":  VerdictPill(text: L.session("starting"),  variant: .blue,  size: .mini)
+        case "stopped":   VerdictPill(text: L.session("stopped"),   variant: .red,   size: .mini)
+        case "failed":    VerdictPill(text: L.session("failed"),    variant: .red,   size: .mini)
+        case "discarded": VerdictPill(text: L.session("discarded"), variant: .grey,  size: .mini)
         default:          EmptyView()
         }
     }
