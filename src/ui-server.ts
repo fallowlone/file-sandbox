@@ -250,6 +250,20 @@ export function startUiServer(
     res.json({ ok: true });
   });
 
+  app.post("/api/sandbox/sessions/:id/export", async (req, res) => {
+    if (!sandboxManager) return res.status(503).json({ error: "sandbox not enabled" });
+    const fileName = req.body?.fileName;
+    if (typeof fileName !== "string" || !fileName) {
+      return res.status(400).json({ error: "fileName required" });
+    }
+    try {
+      const { destPath } = await sandboxManager.exportFromSession(req.params.id, fileName, config.watchPath);
+      res.json({ ok: true, destPath });
+    } catch (e) {
+      res.status(400).json({ error: String((e as Error).message) });
+    }
+  });
+
   app.delete("/api/jobs", (_req, res) => {
     try {
       const { deleted, skipped } = store.clearAll();

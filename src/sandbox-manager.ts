@@ -216,4 +216,21 @@ export class SandboxManager {
       await this.discardSession(s.id, "daemon shutdown").catch(() => {});
     }
   }
+
+  async exportFromSession(id: string, fileName: string, watchPath: string): Promise<{ destPath: string }> {
+    const s = this.store.get(id);
+    if (!s) throw new Error("session not found");
+    // Reject path traversal in fileName
+    if (fileName.includes("/") || fileName.includes("..")) {
+      throw new Error("fileName must not contain path separators");
+    }
+    const src = path.join(s.sessionDir, "out", fileName);
+    if (!fs.existsSync(src)) throw new Error(`file not found in session out/: ${fileName}`);
+    // Move to watch folder so the existing pipeline picks it up
+    const dest = path.join(watchPath, `from-sandbox-${s.id.slice(0,8)}-${fileName}`);
+    fs.copyFileSync(src, dest);
+    fs.unlinkSync(src);
+    this.store.touch(id);
+    return { destPath: dest };
+  }
 }
