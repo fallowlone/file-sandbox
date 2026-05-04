@@ -8,6 +8,7 @@ import type { JobStore } from "./job-store.ts";
 import { JobConflictError } from "./job-store.ts";
 import { config, writeConfig, maskSecret, type RawConfig } from "./config.ts";
 import { metrics } from "./metrics.ts";
+import { MODES, parseMode, type WatcherMode } from "./watcher-mode.ts";
 
 function shouldUpdateSecretField(
   incoming: string | undefined,
@@ -97,6 +98,9 @@ function gateHttpAuth(req: Request, res: Response, next: NextFunction): void {
 }
 
 export interface WatcherControl {
+  getMode: () => WatcherMode;
+  setMode: (mode: WatcherMode) => void;
+  // Legacy passthroughs (kept for back-compat):
   pause: () => void;
   resume: () => void;
   isPaused: () => boolean;
@@ -140,6 +144,11 @@ export function startUiServer(
       lastError: metrics.lastError,
       apiAuthEnabled: Boolean(config.apiToken?.trim()),
       configEncryptedAtRest: config.configEncryptedAtRest,
+      mode: watcherControl?.getMode() ?? "active",
+      scannersEnabled: {
+        pompelmi: config.pompelmiEnabled,
+        vt: config.vtEnabled,
+      },
       localScanner: localScannerInfo,
     });
   });
@@ -154,7 +163,8 @@ export function startUiServer(
     try {
       res.json({
         jobs: store.listRecent(200),
-        paused: watcherControl?.isPaused() ?? false,
+        mode: watcherControl?.getMode() ?? "active",
+        paused: (watcherControl?.getMode() ?? "active") !== "active",
       });
     } catch (e) {
       res.status(500).json({ error: String(e) });
@@ -162,21 +172,36 @@ export function startUiServer(
   });
 
   app.post("/api/watcher/pause", (_req, res) => {
-    if (!watcherControl) {
-      res.status(501).json({ error: "watcher control not configured" });
-      return;
-    }
-    watcherControl.pause();
-    res.json({ ok: true, paused: true });
+    if (!watcherControl) return res.status(501).json({ error: "watcher control not configured" });
+    console.warn("[deprecated] POST /api/watcher/pause - use /api/watcher/mode");
+    watcherControl.setMode("scan_paused");
+    res.json({ ok: true, paused: true, mode: "scan_paused" });
   });
 
   app.post("/api/watcher/resume", (_req, res) => {
+    if (!watcherControl) return res.status(501).json({ error: "watcher control not configured" });
+    console.warn("[deprecated] POST /api/watcher/resume - use /api/watcher/mode");
+    watcherControl.setMode("active");
+    res.json({ ok: true, paused: false, mode: "active" });
+  });
+
+  app.post("/api/watcher/mode", (req, res) => {
     if (!watcherControl) {
       res.status(501).json({ error: "watcher control not configured" });
       return;
     }
-    watcherControl.resume();
-    res.json({ ok: true, paused: false });
+    const requested = parseMode(req.body?.mode);
+    // parseMode falls back to "active" silently. Reject unknown explicitly.
+    if (req.body?.mode && requested !== req.body.mode) {
+      res.status(400).json({
+        error: "unknown mode",
+        allowed: [...MODES],
+        received: req.body?.mode,
+      });
+      return;
+    }
+    watcherControl.setMode(requested);
+    res.json({ ok: true, mode: requested });
   });
 
   app.delete("/api/jobs", (_req, res) => {
