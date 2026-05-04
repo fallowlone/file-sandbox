@@ -128,19 +128,21 @@ Top strip:
 Row (per `SandboxSession`):
 
 ```
-📦  setup-1.4.dmg                       [running]   ⊕ ↥ ⊘
+📦  setup-1.4.dmg                                [⊕] [⤴] [⊘]   [running]
    fsbx-a8c1 · 5m active · network off
 ```
 
-- Two-line layout. Padding `9×14`.
-- Line 1:
-  - Source filename (`URL(fileURLWithPath: session.sourceFilePath).lastPathComponent`).
-  - State pill: `running` (green), `starting` (blue), `stopped`/`failed` (red), `discarded` (grey). Hidden if status not in those.
-  - Action icons revealed on hover (`onHover` ➜ `@State` flag): Show (`⊕` / SF `arrow.up.forward.app`), Export (`↥` / SF `square.and.arrow.up`), Discard (`⊘` / SF `xmark.circle`). Discard uses red foreground.
-- Line 2 (10 pt secondary):
-  - VM tag in monospace `fsbx-XXXXXXXX` rendered with `Color(.controlBackgroundColor)` chip + 1 pt border + radius 4 + padding `1×5`.
-  - Age (`5m`, `1h`).
-  - Network state text — `network on` / `network off`. Read-only.
+- Row is a single `HStack` with `alignment: .center` so labels, action buttons, and state pill all centre vertically against the row's full height.
+- Padding `10×14`. Inner gap `10`.
+- Left column (filename + meta) — `VStack(alignment: .leading, spacing: 4)`, `flex: 1`, takes all remaining horizontal space.
+  - Top: `📦` (or document SF symbol per source extension) + filename in 12 pt 500-weight (`URL(fileURLWithPath: session.sourceFilePath).lastPathComponent`).
+  - Bottom (10 pt secondary): VM tag monospace `fsbx-XXXXXXXX` chip (`Color(.controlBackgroundColor)` bg + 1 pt border + radius 4 + padding `1×5`) · age (`5m`, `1h`) · `network on` / `network off`.
+- Action buttons — three borderless-with-border square buttons sit in their own `HStack(spacing: 4)`, **always visible** (no hover reveal). Each: `28×28 pt`, radius `6`, 1 pt `Color(.separatorColor)` border, `Color(.windowBackground)` fill, `Image(systemName:)` glyph at 14 pt.
+  - Show window — `Image(systemName: "plus.viewfinder")` (placeholder glyph in mockup: `⊕`)
+  - Export — `Image(systemName: "square.and.arrow.up")` (placeholder glyph in mockup: `⤴`)
+  - Discard — `Image(systemName: "xmark.circle")` (placeholder glyph in mockup: `⊘`), red foreground (`Color(red: 0.64, green: 0.15, blue: 0.15)`), red hover bg `#fdecec`, red border `#f3caca`.
+  - Production note: every action glyph is an `Image(systemName:)` SF Symbol — never a text codepoint. The mockups use Unicode glyphs only because the brainstorm companion is HTML.
+- State pill — sits at the far right edge, after the action buttons. Variants: `running` (green), `starting` (blue), `stopped`/`failed` (red), `discarded` (grey). Hidden if status not in those.
 
 Empty state: centred `🛡 + "No sandbox sessions" (12 pt secondary)` + caption `Click + New session to spawn a VM`. Hidden entirely when `!sandboxEnabled` (then a single `Sandbox is disabled in Settings` line replaces the body).
 
