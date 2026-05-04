@@ -193,28 +193,41 @@ struct MenuBarContentView: View {
             Text("FileSandbox")
                 .font(.system(size: 14, weight: .semibold))
             Spacer()
-            if store.isConnected && store.isPaused {
-                Text("Paused")
+            if store.isConnected {
+                Text(store.mode.displayName)
                     .font(.system(size: 10, weight: .semibold))
                     .padding(.horizontal, 5)
                     .padding(.vertical, 2)
-                    .background(Color.orange.opacity(0.18))
-                    .foregroundColor(.orange)
+                    .background(modeTint(store.mode).opacity(0.18))
+                    .foregroundColor(modeTint(store.mode))
                     .clipShape(RoundedRectangle(cornerRadius: 4))
             }
             Circle()
-                .fill(store.isConnected ? (store.isPaused ? Color.orange : Color.green) : Color.red)
+                .fill(store.isConnected ? (store.mode == .active ? Color.green : modeTint(store.mode)) : Color.red)
                 .frame(width: 7, height: 7)
             if store.isConnected {
-                Button(action: {
-                    if store.isPaused { store.resumeWatcher() } else { store.pauseWatcher() }
-                }) {
-                    Image(systemName: store.isPaused ? "play.fill" : "pause.fill")
+                Menu {
+                    ForEach(WatcherMode.allCases, id: \.self) { m in
+                        Button {
+                            store.setMode(m)
+                        } label: {
+                            Label {
+                                Text(m.displayName)
+                            } icon: {
+                                if store.mode == m {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: store.mode.symbolName)
                         .font(.system(size: 11))
+                        .foregroundColor(modeTint(store.mode))
                 }
-                .buttonStyle(.plain)
-                .foregroundColor(store.isPaused ? .accentColor : .secondary)
-                .help(store.isPaused ? "Resume scanning of new files" : "Pause scanning — incoming files ignored")
+                .menuStyle(.borderlessButton)
+                .frame(width: 24)
+                .help("Watcher mode")
             }
             if store.isDaemonRunning && !store.isConnected {
                 Button(action: { store.stopDaemon() }) {
@@ -362,5 +375,13 @@ struct MenuBarContentView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
         }
+    }
+}
+
+private func modeTint(_ mode: WatcherMode) -> Color {
+    switch mode {
+    case .active: return .secondary
+    case .scanPaused: return .orange
+    case .monitoringDisabled: return .red
     }
 }
