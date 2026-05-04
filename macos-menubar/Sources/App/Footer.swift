@@ -3,6 +3,7 @@ import AppKit
 
 struct AppFooter: View {
     @ObservedObject var store: JobStore
+    @ObservedObject var settingsStore: SettingsStore
 
     var body: some View {
         VStack(spacing: 4) {
@@ -39,17 +40,22 @@ struct AppFooter: View {
     }
 
     private func openLogs() {
-        let url = URL(fileURLWithPath: NSString("~/Library/Logs/FileSandbox/daemon.log").expandingTildeInPath)
-        if FileManager.default.fileExists(atPath: url.path) {
-            NSWorkspace.shared.open(url)
+        let projectPath = settingsStore.daemonProjectPath
+        let primary = projectPath.isEmpty ? "" : "\(projectPath)/logs/daemon-ui.log"
+        let fallback = NSString("~/Library/Logs/FileSandbox/daemon.log").expandingTildeInPath
+        let target = !primary.isEmpty && FileManager.default.fileExists(atPath: primary)
+            ? URL(fileURLWithPath: primary)
+            : URL(fileURLWithPath: fallback)
+        if FileManager.default.fileExists(atPath: target.path) {
+            NSWorkspace.shared.open(target)
         } else {
-            NSWorkspace.shared.open(url.deletingLastPathComponent())
+            NSWorkspace.shared.open(target.deletingLastPathComponent())
         }
     }
 }
 
 private struct LinkText: View {
-    let text: String
+    let text: LocalizedStringKey
     let action: () -> Void
     @State private var hovered = false
 

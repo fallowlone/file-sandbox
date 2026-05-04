@@ -20,7 +20,7 @@ struct MenuBarContentView: View {
             )
             tabBody
                 .frame(minHeight: 520, maxHeight: 600)
-            AppFooter(store: store)
+            AppFooter(store: store, settingsStore: settingsStore)
         }
         .frame(width: 420)
         .background(Theme.panelBg)

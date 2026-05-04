@@ -63,8 +63,18 @@ class SandboxStore: ObservableObject {
                     self.loadError = error.localizedDescription
                     return
                 }
-                guard let data,
-                      let decoded = try? JSONDecoder().decode([String: [SandboxSession]].self, from: data),
+                guard let data else {
+                    self.loadError = "no data"
+                    return
+                }
+                // Surface daemon error payloads (`{"error": "..."}`) verbatim.
+                if let errPayload = try? JSONDecoder().decode([String: String].self, from: data),
+                   let msg = errPayload["error"] {
+                    self.loadError = msg
+                    self.sessions = []
+                    return
+                }
+                guard let decoded = try? JSONDecoder().decode([String: [SandboxSession]].self, from: data),
                       let arr = decoded["sessions"]
                 else {
                     self.loadError = "decode failed"
