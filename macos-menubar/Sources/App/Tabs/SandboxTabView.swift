@@ -175,7 +175,7 @@ private struct SandboxRowView: View {
 
 private struct IconButton: View {
     let symbol: String
-    let help: String
+    let help: LocalizedStringKey
     var isDanger: Bool = false
     let action: () -> Void
 
