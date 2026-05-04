@@ -34,10 +34,6 @@ struct FileSandboxMenuBarApp: App {
             let req = UNNotificationRequest(identifier: "filesandbox.launch.mode", content: content, trigger: nil)
             UNUserNotificationCenter.current().add(req)
         }
-
-        Settings {
-            SettingsView(store: settingsStore)
-        }
     }
 }
 
