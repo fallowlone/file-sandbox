@@ -9,6 +9,7 @@ import { JobConflictError } from "./job-store.ts";
 import { config, writeConfig, maskSecret, type RawConfig } from "./config.ts";
 import { metrics } from "./metrics.ts";
 import { MODES, parseMode, type WatcherMode } from "./watcher-mode.ts";
+import type { SandboxManager } from "./sandbox-manager.ts";
 
 function shouldUpdateSecretField(
   incoming: string | undefined,
@@ -113,6 +114,7 @@ export function startUiServer(
   deleteQuarantinedFile?: (id: string, detail?: string) => Promise<void>,
   restoreQuarantinedFile?: (id: string) => Promise<void>,
   watcherControl?: WatcherControl,
+  sandboxManager?: SandboxManager,
 ) {
   const host = process.env.HTTP_HOST ?? config.httpHost ?? "127.0.0.1";
   const app = express();
@@ -136,6 +138,16 @@ export function startUiServer(
       }
     })();
 
+    const sandboxInfo = sandboxManager
+      ? {
+          enabled: true,
+          tartInstalled: true,
+          baseImagePresent: true,
+          activeSessions: sandboxManager.listSessions({ limit: 500 })
+            .filter((s) => s.status === "running" || s.status === "starting").length,
+        }
+      : { enabled: false, tartInstalled: false, baseImagePresent: false, activeSessions: 0 };
+
     res.json({
       ok: true,
       uptimeSec: Math.floor((Date.now() - metrics.startedAt) / 1000),
@@ -150,6 +162,7 @@ export function startUiServer(
         vt: config.vtEnabled,
       },
       localScanner: localScannerInfo,
+      sandbox: sandboxInfo,
     });
   });
 
@@ -202,6 +215,39 @@ export function startUiServer(
     }
     watcherControl.setMode(requested);
     res.json({ ok: true, mode: requested });
+  });
+
+  app.post("/api/sandbox/sessions", async (req, res) => {
+    if (!sandboxManager) return res.status(503).json({ error: "sandbox not enabled" });
+    try {
+      const session = await sandboxManager.createSession({
+        filePath: req.body?.filePath,
+        sourceJobId: req.body?.sourceJobId ?? undefined,
+        network: typeof req.body?.network === "boolean" ? req.body.network : undefined,
+      });
+      res.json({ ok: true, session });
+    } catch (e) {
+      res.status(400).json({ error: String((e as Error).message ?? e) });
+    }
+  });
+
+  app.get("/api/sandbox/sessions", (req, res) => {
+    if (!sandboxManager) return res.status(503).json({ error: "sandbox not enabled" });
+    const limit = Number(req.query?.limit ?? 50);
+    res.json({ sessions: sandboxManager.listSessions({ limit }) });
+  });
+
+  app.get("/api/sandbox/sessions/:id", (req, res) => {
+    if (!sandboxManager) return res.status(503).json({ error: "sandbox not enabled" });
+    const s = sandboxManager.getSession(req.params.id);
+    if (!s) return res.status(404).json({ error: "not found" });
+    res.json({ session: s });
+  });
+
+  app.delete("/api/sandbox/sessions/:id", async (req, res) => {
+    if (!sandboxManager) return res.status(503).json({ error: "sandbox not enabled" });
+    await sandboxManager.discardSession(req.params.id);
+    res.json({ ok: true });
   });
 
   app.delete("/api/jobs", (_req, res) => {
