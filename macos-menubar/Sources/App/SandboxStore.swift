@@ -24,6 +24,20 @@ struct SandboxSession: Codable, Identifiable, Equatable {
 class SandboxStore: ObservableObject {
     @Published var sessions: [SandboxSession] = []
     @Published var loadError: String? = nil
+    @Published var sandboxEnabled: Bool = false
+    @Published var tartInstalled: Bool = true
+    @Published var baseImagePresent: Bool = true
+
+    /// True only if every prerequisite for spawning a session is in place.
+    /// Used by the Jobs tab "Open in sandbox" button and the Sandbox tab "+ New session" button.
+    var canOpen: Bool {
+        sandboxEnabled && tartInstalled && baseImagePresent
+    }
+
+    /// Number of running/starting sessions, for the Sandbox tab count chip.
+    var activeCount: Int {
+        sessions.filter { $0.status == "running" || $0.status == "starting" }.count
+    }
 
     private let port: String
 

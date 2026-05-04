@@ -184,6 +184,22 @@ class JobStore: ObservableObject {
 
     var threatCount: Int { activeThreats.count }
 
+    /// Count for the Jobs tab pill (scanning + quarantined; restored hidden).
+    var visibleJobCount: Int {
+        jobs.filter { ["scanning", "received", "in_quarantine", "quarantine_kept"].contains($0.status) }.count
+    }
+
+    /// Quick lookups used by the grouped jobs view.
+    var scanningJobs: [SandboxJob] {
+        jobs.filter { $0.status == "scanning" || $0.status == "received" || $0.status == "in_quarantine" }
+    }
+    var quarantinedJobs: [SandboxJob] {
+        jobs.filter { $0.status == "quarantine_kept" }
+    }
+    var restoredJobs: [SandboxJob] {
+        jobs.filter { $0.status == "restored" }
+    }
+
     func startPolling() {
         fetch()
         rescheduleTimer(interval: targetPollInterval)
