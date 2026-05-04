@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import SwiftUI
 
 enum WatcherMode: String, Codable, CaseIterable {
     case active
@@ -12,6 +13,12 @@ enum WatcherMode: String, Codable, CaseIterable {
         case .scanPaused: return "Scanning paused"
         case .monitoringDisabled: return "Monitoring disabled"
         }
+    }
+
+    /// Localized display name for views (`StatusChip`, picker labels).
+    /// Routes through the catalog `mode.<rawValue>` keys.
+    var displayKey: LocalizedStringKey {
+        L.mode(self)
     }
 
     var symbolName: String {
