@@ -29,7 +29,7 @@ export function validateSandboxSourcePath(
   } catch {
     // file may not exist yet; still resolve `..`
   }
-  const allowed = [roots.watchPath, roots.quarantinePath]
+  const allowed = [roots.watchPath, roots.quarantinePath, roots.homeDir]
     .map((p) => path.resolve(p))
     .filter(Boolean);
   if (!allowed.some((root) => resolved === root || isInside(resolved, root))) {
