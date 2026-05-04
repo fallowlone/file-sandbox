@@ -16,6 +16,11 @@ struct DaemonConfig: Codable {
     var useSeparateVtProcess: Bool?
     var inconclusiveRetentionDays: Int?
     var configEncryptedAtRest: Bool?
+    var watcherMode: String?
+    var vtEnabled: Bool?
+    var pompelmiEnabled: Bool?
+    var pompelmiSocketPath: String?
+    var pompelmiFailureMode: String?
 }
 
 enum DaemonLocalStorage {
@@ -47,6 +52,11 @@ class SettingsStore: ObservableObject {
     @Published var maxConcurrentScans: Int = 2
     @Published var useSeparateVtProcess: Bool = false
     @Published var inconclusiveRetentionDays: Int = 0
+    @Published var watcherMode: WatcherMode = .active
+    @Published var vtEnabled: Bool = true
+    @Published var pompelmiEnabled: Bool = true
+    @Published var pompelmiSocketPath: String = "/tmp/clamd.sock"
+    @Published var pompelmiFailureMode: String = "bypass"
 
     // Stored locally — no daemon required (used when daemon is offline)
     @Published var daemonProjectPath: String = ""
@@ -118,6 +128,11 @@ class SettingsStore: ObservableObject {
                 }
                 self.useSeparateVtProcess = decoded.useSeparateVtProcess ?? false
                 self.inconclusiveRetentionDays = decoded.inconclusiveRetentionDays ?? 0
+                self.watcherMode = WatcherMode(rawValue: decoded.watcherMode ?? "active") ?? .active
+                self.vtEnabled = decoded.vtEnabled ?? true
+                self.pompelmiEnabled = decoded.pompelmiEnabled ?? true
+                self.pompelmiSocketPath = decoded.pompelmiSocketPath ?? "/tmp/clamd.sock"
+                self.pompelmiFailureMode = decoded.pompelmiFailureMode ?? "bypass"
             }
         }.resume()
     }
@@ -143,6 +158,11 @@ class SettingsStore: ObservableObject {
             "maxScanBytes": scanBytes,
             "maxConcurrentScans": maxConcurrentScans,
             "inconclusiveRetentionDays": inconclusiveRetentionDays,
+            "watcherMode": watcherMode.rawValue,
+            "vtEnabled": vtEnabled,
+            "pompelmiEnabled": pompelmiEnabled,
+            "pompelmiSocketPath": pompelmiSocketPath,
+            "pompelmiFailureMode": pompelmiFailureMode,
         ]
         if !vtApiKey.isEmpty { body["vtApiKey"] = vtApiKey }
 

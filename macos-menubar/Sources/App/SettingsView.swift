@@ -6,7 +6,7 @@ struct SettingsView: View {
     @State private var showVtKey = false
 
     enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
-        case paths, network, daemon, scan, virustotal
+        case paths, network, daemon, scan, virustotal, watcher, scanners
         var id: String { rawValue }
 
         var title: String {
@@ -16,6 +16,8 @@ struct SettingsView: View {
             case .daemon: return "Daemon launch"
             case .scan: return "Watch & scan"
             case .virustotal: return "VirusTotal"
+            case .watcher: return "Watcher"
+            case .scanners: return "Scanners"
             }
         }
 
@@ -26,6 +28,8 @@ struct SettingsView: View {
             case .daemon:     return "How the menubar launches the background service."
             case .scan:       return "Watch scope, scan limits, and inconclusive retention."
             case .virustotal: return "API key used to scan files against VirusTotal."
+            case .watcher:    return "Watcher mode controls file handling behavior."
+            case .scanners:   return "Configure local and cloud virus scanning."
             }
         }
 
@@ -36,6 +40,8 @@ struct SettingsView: View {
             case .daemon:     return "bolt.horizontal.fill"
             case .scan:       return "eye.fill"
             case .virustotal: return "shield.lefthalf.filled"
+            case .watcher:    return "clock.fill"
+            case .scanners:   return "magnifyingglass.circle.fill"
             }
         }
 
@@ -46,6 +52,8 @@ struct SettingsView: View {
             case .daemon:     return .orange
             case .scan:       return .teal
             case .virustotal: return .red
+            case .watcher:    return .purple
+            case .scanners:   return .green
             }
         }
     }
@@ -123,6 +131,8 @@ struct SettingsView: View {
                     case .daemon:     daemonContent
                     case .scan:       scanContent
                     case .virustotal: virusTotalContent
+                    case .watcher:    watcherContent
+                    case .scanners:   scannersContent
                     }
                 }
             }
@@ -398,6 +408,70 @@ struct SettingsView: View {
         }
     }
 
+    private var watcherContent: some View {
+        card {
+            VStack(alignment: .leading, spacing: 14) {
+                sectionHeading("Mode")
+                Picker("Mode", selection: $store.watcherMode) {
+                    ForEach(WatcherMode.allCases, id: \.self) { m in
+                        Text(m.displayName).tag(m)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Text(modeExplainer(store.watcherMode))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    private var scannersContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            card {
+                VStack(alignment: .leading, spacing: 14) {
+                    sectionHeading("Local scanner")
+                    Toggle(isOn: $store.pompelmiEnabled) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Local scanner (pompelmi/ClamAV)")
+                                .font(.system(size: 13, weight: .medium))
+                        }
+                    }
+                    .toggleStyle(.switch)
+
+                    if store.pompelmiEnabled {
+                        stackedTextField(title: "clamd socket path",
+                                       text: $store.pompelmiSocketPath,
+                                       prompt: "/tmp/clamd.sock")
+                        divider
+                        Picker("On scan error", selection: $store.pompelmiFailureMode) {
+                            Text("Bypass to VT").tag("bypass")
+                            Text("Mark inconclusive").tag("inconclusive")
+                        }
+                    }
+                }
+            }
+
+            card {
+                VStack(alignment: .leading, spacing: 14) {
+                    sectionHeading("Cloud scanner")
+                    Toggle(isOn: $store.vtEnabled) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("VirusTotal cloud")
+                                .font(.system(size: 13, weight: .medium))
+                        }
+                    }
+                    .toggleStyle(.switch)
+
+                    if !store.pompelmiEnabled && !store.vtEnabled {
+                        Text("No active scanners - every new file will be quarantined as inconclusive.")
+                            .font(.caption)
+                            .foregroundColor(.red)
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: - Helpers
 
     private var divider: some View {
@@ -476,6 +550,14 @@ struct SettingsView: View {
                 .foregroundColor(on ? .white : .primary)
         }
         .buttonStyle(.plain)
+    }
+
+    private func modeExplainer(_ m: WatcherMode) -> String {
+        switch m {
+        case .active: return "Files are quarantined and scanned."
+        case .scanPaused: return "Files are quarantined but not scanned. Restore manually after review."
+        case .monitoringDisabled: return "Watcher ignores new files entirely. Advanced - files are not protected."
+        }
     }
 
     // MARK: - Footer
