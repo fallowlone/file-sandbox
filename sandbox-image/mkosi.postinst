@@ -1,15 +1,12 @@
 #!/bin/sh
 set -eux
-ROOT="$1"
-chroot "$ROOT" /bin/sh -eux <<'INNER'
 useradd -m -u 1000 -s /bin/bash sandbox || true
 passwd -l sandbox
 passwd -l root
 systemctl enable sandbox-launch.service
 apt-get purge -y --autoremove cups-* exim4-* unattended-upgrades || true
-apt-get clean
-rm -rf /var/cache/apt/archives /var/lib/apt/lists /var/cache/man /var/cache/debconf
+apt-get clean || true
+rm -rf /var/lib/apt/lists /var/cache/man /var/cache/debconf || true
 for s in systemd-resolved systemd-networkd systemd-timesyncd cron rsyslog; do
     systemctl disable "$s" 2>/dev/null || true
 done
-INNER
