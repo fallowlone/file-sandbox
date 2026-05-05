@@ -1,0 +1,13 @@
+[Unit]
+Description=Open file in sandbox viewer
+After=graphical.target
+Requires=graphical.target
+
+[Service]
+Type=oneshot
+ExecStart=/etc/sandbox-init
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical.target
