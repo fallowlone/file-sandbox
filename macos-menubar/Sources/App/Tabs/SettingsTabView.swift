@@ -5,6 +5,7 @@ struct SettingsTabView: View {
     @ObservedObject var settingsStore: SettingsStore
     @ObservedObject var store: JobStore
     @AppStorage("filesandbox.locale") private var localeRaw: String = AppLocale.auto.rawValue
+    @StateObject private var sandboxCfg = SandboxConfigVM()
 
     /// Debounced auto-save: any @Published change triggers `save()` 400 ms later.
     @State private var saveTimer: AnyCancellable? = nil
@@ -72,21 +73,27 @@ struct SettingsTabView: View {
 
                 SettingGroupHeader(title: "Sandbox")
                 SettingRow(label: "Enable") {
-                    AppSwitch(isOn: bind($settingsStore.sandboxEnabled))
+                    AppSwitch(isOn: $sandboxCfg.cfg.enabled)
                 }
-                if settingsStore.sandboxEnabled {
+                if sandboxCfg.cfg.enabled {
                     SettingRow(label: "Idle timeout (min)", indent: 16) {
-                        Stepper(value: bind($settingsStore.sandboxIdleTimeoutMinutes), in: 5...10080, step: 5) {
-                            Text("\(settingsStore.sandboxIdleTimeoutMinutes)")
+                        Stepper(value: $sandboxCfg.cfg.idleTimeoutMinutes, in: 5...240, step: 5) {
+                            Text("\(sandboxCfg.cfg.idleTimeoutMinutes)")
                                 .font(.system(size: 11, design: .monospaced))
                         }
                     }
                     SettingRow(label: "Network ON by default", indent: 16) {
-                        AppSwitch(isOn: bind($settingsStore.sandboxNetworkDefault))
+                        AppSwitch(isOn: $sandboxCfg.cfg.networkDefault)
                     }
-                    SettingRow(label: "Output retention (days)", indent: 16) {
-                        Stepper(value: bind($settingsStore.sandboxOutRetentionDays), in: 0...90, step: 1) {
-                            Text("\(settingsStore.sandboxOutRetentionDays)")
+                    SettingRow(label: "VM memory (MiB)", indent: 16) {
+                        Stepper(value: $sandboxCfg.cfg.vmMemoryMB, in: 1024...16384, step: 1024) {
+                            Text("\(sandboxCfg.cfg.vmMemoryMB)")
+                                .font(.system(size: 11, design: .monospaced))
+                        }
+                    }
+                    SettingRow(label: "vCPU count", indent: 16) {
+                        Stepper(value: $sandboxCfg.cfg.vmCpuCount, in: 1...8, step: 1) {
+                            Text("\(sandboxCfg.cfg.vmCpuCount)")
                                 .font(.system(size: 11, design: .monospaced))
                         }
                     }
@@ -158,5 +165,20 @@ struct SettingsTabView: View {
         saveTimer = Just(())
             .delay(for: .milliseconds(400), scheduler: DispatchQueue.main)
             .sink { _ in settingsStore.save() }
+    }
+}
+
+@MainActor
+final class SandboxConfigVM: ObservableObject {
+    @Published var cfg: SandboxConfig {
+        didSet { try? cfg.save(to: url) }
+    }
+    private let url: URL
+
+    init() {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("FileSandbox")
+        self.url = support.appendingPathComponent("sandbox-config.json")
+        self.cfg = (try? SandboxConfig.load(from: url)) ?? .init()
     }
 }
