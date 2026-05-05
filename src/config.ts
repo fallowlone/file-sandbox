@@ -34,11 +34,6 @@ export interface RawConfig {
   watcherMode?: WatcherMode | string;
   /** Run VirusTotal scan stage. Defaults to true. */
   vtEnabled?: boolean;
-  sandboxEnabled?: boolean;
-  sandboxIdleTimeoutMinutes?: number;
-  sandboxNetworkDefault?: boolean;
-  sandboxSessionsDir?: string;
-  sandboxOutRetentionDays?: number;
 }
 
 const configPath = join(process.cwd(), "config.json");
@@ -182,19 +177,5 @@ export const config = {
   })(),
   watcherMode: parseMode(file.watcherMode ?? process.env.WATCHER_MODE),
   vtEnabled: file.vtEnabled ?? envBool("VT_ENABLED", true),
-  sandboxEnabled: file.sandboxEnabled ?? envBool("SANDBOX_ENABLED", false),
-  sandboxIdleTimeoutMinutes: Math.max(
-    1,
-    file.sandboxIdleTimeoutMinutes ?? envInt("SANDBOX_IDLE_TIMEOUT_MIN", 240),
-  ),
-  sandboxNetworkDefault: file.sandboxNetworkDefault ?? envBool("SANDBOX_NETWORK_DEFAULT", false),
-  sandboxSessionsDir:
-    file.sandboxSessionsDir
-    ?? process.env.SANDBOX_SESSIONS_DIR
-    ?? `${process.env.HOME ?? ""}/Library/Application Support/FileSandbox/sandbox-sessions`,
-  sandboxOutRetentionDays: Math.max(
-    0,
-    file.sandboxOutRetentionDays ?? envInt("SANDBOX_OUT_RETENTION_DAYS", 7),
-  ),
   configEncryptedAtRest: Boolean(masterKeyFromEnv()),
 };
