@@ -7,9 +7,6 @@ import FileMover from "./file-mover.ts";
 import { assertSafeHttpHost } from "./http-host-guard.ts";
 import { startInconclusiveSweeper } from "./inconclusive-sweeper.ts";
 import { LocalScanner } from "./local-scanner.ts";
-import { TartCli } from "./sandbox-tart.ts";
-import { SandboxStore } from "./sandbox-store.ts";
-import { SandboxManager } from "./sandbox-manager.ts";
 
 if (!config.vtApiKey)
   throw new Error("vtApiKey not set (config.json or VT_API_KEY)");
@@ -37,34 +34,8 @@ if (config.pompelmiEnabled) {
 const jobStore = new JobStore(config.databasePath);
 const fileMover = new FileMover(config.quarantinePath);
 
-let sandboxManager: SandboxManager | null = null;
-let sandboxProbe = { tartInstalled: false, baseImagePresent: false };
 if (config.sandboxEnabled) {
-  const tart = new TartCli();
-  sandboxProbe = await SandboxManager.probe(tart, config.sandboxBaseVm);
-  if (!sandboxProbe.tartInstalled) {
-    console.warn("[sandbox] enabled but `tart` not in PATH - sandbox endpoints will return 503.");
-  } else if (!sandboxProbe.baseImagePresent) {
-    console.warn(`[sandbox] base VM "${config.sandboxBaseVm}" not present. Run \`tart pull\` and \`tart clone\` first.`);
-  } else {
-    const sandboxStore = new SandboxStore(config.databasePath);
-    sandboxManager = new SandboxManager({
-      store: sandboxStore,
-      tart,
-      sessionsDir: config.sandboxSessionsDir,
-      baseVm: config.sandboxBaseVm,
-      idleTimeoutMinutes: config.sandboxIdleTimeoutMinutes,
-      networkDefault: config.sandboxNetworkDefault,
-      allowedRoots: {
-        watchPath: config.watchPath,
-        quarantinePath: config.quarantinePath,
-        homeDir: process.env.HOME ?? "",
-      },
-      probeInfo: sandboxProbe,
-    });
-    await sandboxManager.init();
-    console.log("[sandbox] manager initialised");
-  }
+  console.warn("[sandbox] enabled in config but no backend wired - sandbox endpoints will return 503. Linux backend pending.");
 }
 
 const watcher = new Watcher(
@@ -142,7 +113,6 @@ if (config.httpPort !== undefined) {
     deleteQuarantineJob,
     restoreQuarantineJob,
     watcherControl,
-    sandboxManager ?? undefined,
   );
 }
 
@@ -160,7 +130,6 @@ if (config.inconclusiveRetentionDays > 0) {
 }
 
 async function shutdown() {
-  try { await sandboxManager?.shutdownAll(); } catch { /* ignore */ }
   jobStore.close();
   process.exit(0);
 }

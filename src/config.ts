@@ -35,7 +35,6 @@ export interface RawConfig {
   /** Run VirusTotal scan stage. Defaults to true. */
   vtEnabled?: boolean;
   sandboxEnabled?: boolean;
-  sandboxBaseVm?: string;
   sandboxIdleTimeoutMinutes?: number;
   sandboxNetworkDefault?: boolean;
   sandboxSessionsDir?: string;
@@ -184,7 +183,6 @@ export const config = {
   watcherMode: parseMode(file.watcherMode ?? process.env.WATCHER_MODE),
   vtEnabled: file.vtEnabled ?? envBool("VT_ENABLED", true),
   sandboxEnabled: file.sandboxEnabled ?? envBool("SANDBOX_ENABLED", false),
-  sandboxBaseVm: file.sandboxBaseVm ?? process.env.SANDBOX_BASE_VM ?? "filesandbox-base",
   sandboxIdleTimeoutMinutes: Math.max(
     1,
     file.sandboxIdleTimeoutMinutes ?? envInt("SANDBOX_IDLE_TIMEOUT_MIN", 240),

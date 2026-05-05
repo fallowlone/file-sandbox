@@ -25,13 +25,12 @@ class SandboxStore: ObservableObject {
     @Published var sessions: [SandboxSession] = []
     @Published var loadError: String? = nil
     @Published var sandboxEnabled: Bool = false
-    @Published var tartInstalled: Bool = true
-    @Published var baseImagePresent: Bool = true
+    @Published var backendReady: Bool = false
 
     /// True only if every prerequisite for spawning a session is in place.
     /// Used by the Jobs tab "Open in sandbox" button and the Sandbox tab "+ New session" button.
     var canOpen: Bool {
-        sandboxEnabled && tartInstalled && baseImagePresent
+        sandboxEnabled && backendReady
     }
 
     /// Number of running/starting sessions, for the Sandbox tab count chip.

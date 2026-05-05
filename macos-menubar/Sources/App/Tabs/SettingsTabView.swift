@@ -75,12 +75,6 @@ struct SettingsTabView: View {
                     AppSwitch(isOn: bind($settingsStore.sandboxEnabled))
                 }
                 if settingsStore.sandboxEnabled {
-                    SettingRow(label: "Base VM name", indent: 16) {
-                        TextField("", text: $settingsStore.sandboxBaseVm, onCommit: scheduleSave)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(size: 11, design: .monospaced))
-                            .frame(width: 180)
-                    }
                     SettingRow(label: "Idle timeout (min)", indent: 16) {
                         Stepper(value: bind($settingsStore.sandboxIdleTimeoutMinutes), in: 5...10080, step: 5) {
                             Text("\(settingsStore.sandboxIdleTimeoutMinutes)")
