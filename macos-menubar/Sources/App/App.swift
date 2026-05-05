@@ -28,10 +28,10 @@ struct FileSandboxMenuBarApp: App {
                 .environment(\.locale, resolvedLocale(for: appLocale) ?? Locale.current)
                 .textSelection(.disabled)
                 .onAppear {
-                    sandboxStore.sandboxEnabled = settingsStore.sandboxEnabled
+                    sandboxStore.refreshEnabled()
                 }
-                .onChange(of: settingsStore.sandboxEnabled) { _, new in
-                    sandboxStore.sandboxEnabled = new
+                .onChange(of: settingsStore.sandboxEnabled) { _, _ in
+                    sandboxStore.refreshEnabled()
                 }
         } label: {
             Image(systemName: store.iconName)
