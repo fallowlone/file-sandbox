@@ -16,5 +16,10 @@ let package = Package(
                 .linkedFramework("Virtualization")
             ]
         ),
+        .testTarget(
+            name: "SandboxTests",
+            dependencies: ["FileSandboxMenuBar"],
+            path: "Tests/SandboxTests"
+        ),
     ]
 )
