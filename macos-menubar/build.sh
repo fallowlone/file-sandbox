@@ -66,5 +66,12 @@ cat > "$APP/Contents/Info.plist" << 'EOF'
 </plist>
 EOF
 
+echo "Ad-hoc codesigning with virtualization entitlement..."
+codesign --force --sign - \
+         --entitlements sandbox.entitlements \
+         --options runtime \
+         "$APP"
+codesign --verify --verbose=2 "$APP"
+
 echo "Done: $(pwd)/$APP"
 echo "Run: open \"$(pwd)/$APP\""
