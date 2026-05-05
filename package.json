@@ -8,7 +8,8 @@
   "scripts": {
     "start": "node --experimental-strip-types src/index.ts",
     "start:local": "node --experimental-strip-types --env-file=.env src/index.ts",
-    "test": "node --experimental-strip-types --test 'src/**/*.test.ts'"
+    "test": "node --experimental-strip-types --test 'src/**/*.test.ts'",
+    "sandbox:build": "bash scripts/sandbox-build.sh"
   },
   "keywords": [],
   "author": "artem hrechuk <hrechuk.artem@gmail.com>",
