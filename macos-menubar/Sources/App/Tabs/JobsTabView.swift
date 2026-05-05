@@ -245,7 +245,7 @@ private struct JobRow: View {
             HStack(spacing: 6) {
                 if job.status == "quarantine_kept" && sandboxStore.canOpen, let path = job.final_path {
                     Button {
-                        sandboxStore.create(filePath: path, sourceJobId: job.id, network: false) { _ in }
+                        sandboxStore.openSandbox(filePath: path)
                     } label: {
                         Label("Open in sandbox", systemImage: "shield.lefthalf.filled")
                             .font(.system(size: 11, weight: .medium))
