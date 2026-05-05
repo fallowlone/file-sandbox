@@ -30,9 +30,6 @@ struct FileSandboxMenuBarApp: App {
                 .onAppear {
                     sandboxStore.refreshEnabled()
                 }
-                .onChange(of: settingsStore.sandboxEnabled) { _, _ in
-                    sandboxStore.refreshEnabled()
-                }
         } label: {
             Image(systemName: store.iconName)
                 .symbolRenderingMode(.hierarchical)
