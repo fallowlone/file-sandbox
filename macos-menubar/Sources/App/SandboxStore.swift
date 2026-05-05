@@ -1,119 +1,46 @@
 import Foundation
 import Combine
 
-struct SandboxSession: Codable, Identifiable, Equatable {
-    let id: String
-    let vmName: String
-    let sourceJobId: String?
-    let sourceFilePath: String
-    let sessionDir: String
-    let pid: Int?
-    let networkEnabled: Bool
-    let status: String
-    let detail: String?
-    let createdAt: String
-    let lastActiveAt: String
-    let exitedAt: String?
-
-    enum CodingKeys: String, CodingKey {
-        case id, vmName, sourceJobId, sourceFilePath, sessionDir
-        case pid, networkEnabled, status, detail, createdAt, lastActiveAt, exitedAt
-    }
-}
-
-class SandboxStore: ObservableObject {
-    @Published var sessions: [SandboxSession] = []
-    @Published var loadError: String? = nil
+@MainActor
+final class SandboxStore: ObservableObject {
+    @Published var sessions: [SessionRecord] = []
     @Published var sandboxEnabled: Bool = false
-    @Published var backendReady: Bool = false
 
-    /// True only if every prerequisite for spawning a session is in place.
-    /// Used by the Jobs tab "Open in sandbox" button and the Sandbox tab "+ New session" button.
-    var canOpen: Bool {
-        sandboxEnabled && backendReady
+    /// Alias kept for existing call-sites (JobsTabView "Open in sandbox" button gating).
+    var canOpen: Bool { sandboxEnabled }
+
+    /// Active session count — for the Sandbox tab badge.
+    var activeCount: Int { sessions.filter { $0.status == .running }.count }
+
+    private var cancellables = Set<AnyCancellable>()
+    private let manager: SandboxManager
+
+    init(manager: SandboxManager = .shared) {
+        self.manager = manager
+        manager.$sessions
+            .receive(on: DispatchQueue.main)
+            .assign(to: \.sessions, on: self)
+            .store(in: &cancellables)
+        refreshEnabled()
     }
 
-    /// Number of running/starting sessions, for the Sandbox tab count chip.
-    var activeCount: Int {
-        sessions.filter { $0.status == "running" || $0.status == "starting" }.count
+    /// Read enabled flag from on-disk config. Call after the user toggles enabled in Settings.
+    func refreshEnabled() {
+        sandboxEnabled = manager.currentConfig().enabled
     }
 
-    private let port: String
-
-    init() {
-        self.port = ProcessInfo.processInfo.environment["FILE_SANDBOX_PORT"] ?? "3847"
+    /// Push allowed roots into SandboxManager (typically called when SettingsStore loads /api/config).
+    func configurePaths(watchPath: String, quarantinePath: String) {
+        manager.configure(watchPath: watchPath, quarantinePath: quarantinePath)
     }
 
-    private func authorizedRequest(url: URL) -> URLRequest {
-        var request = URLRequest(url: url)
-        let t = ClientAuthStorage.token
-        if !t.isEmpty {
-            request.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization")
-        }
-        return request
+    /// Open a sandbox session for the given file. Errors are logged; UI surfaces enabled/disabled state.
+    func openSandbox(filePath: String) {
+        do { _ = try manager.openSession(filePath: filePath) }
+        catch { NSLog("openSandbox failed: \(error)") }
     }
 
-    func fetch() {
-        guard let url = URL(string: "http://127.0.0.1:\(port)/api/sandbox/sessions?limit=50") else { return }
-        URLSession.shared.dataTask(with: authorizedRequest(url: url)) { [weak self] data, _, error in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                if let error {
-                    self.loadError = error.localizedDescription
-                    return
-                }
-                guard let data else {
-                    self.loadError = "no data"
-                    return
-                }
-                // Surface daemon error payloads (`{"error": "..."}`) verbatim.
-                if let errPayload = try? JSONDecoder().decode([String: String].self, from: data),
-                   let msg = errPayload["error"] {
-                    self.loadError = msg
-                    self.sessions = []
-                    return
-                }
-                guard let decoded = try? JSONDecoder().decode([String: [SandboxSession]].self, from: data),
-                      let arr = decoded["sessions"]
-                else {
-                    self.loadError = "decode failed"
-                    return
-                }
-                self.sessions = arr
-                self.loadError = nil
-            }
-        }.resume()
-    }
-
-    func create(filePath: String, sourceJobId: String?, network: Bool, completion: @escaping (Bool) -> Void) {
-        guard let url = URL(string: "http://127.0.0.1:\(port)/api/sandbox/sessions") else {
-            completion(false)
-            return
-        }
-        var req = authorizedRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        var body: [String: Any] = ["filePath": filePath, "network": network]
-        if let sourceJobId {
-            body["sourceJobId"] = sourceJobId
-        }
-        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        URLSession.shared.dataTask(with: req) { [weak self] _, _, error in
-            DispatchQueue.main.async {
-                completion(error == nil)
-                self?.fetch()
-            }
-        }.resume()
-    }
-
-    func discard(_ id: String) {
-        guard let url = URL(string: "http://127.0.0.1:\(port)/api/sandbox/sessions/\(id)") else { return }
-        var req = authorizedRequest(url: url)
-        req.httpMethod = "DELETE"
-        URLSession.shared.dataTask(with: req) { [weak self] _, _, _ in
-            DispatchQueue.main.async {
-                self?.fetch()
-            }
-        }.resume()
+    func discard(id: UUID) {
+        manager.discardSession(id: id)
     }
 }

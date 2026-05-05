@@ -34,10 +34,6 @@ if (config.pompelmiEnabled) {
 const jobStore = new JobStore(config.databasePath);
 const fileMover = new FileMover(config.quarantinePath);
 
-if (config.sandboxEnabled) {
-  console.warn("[sandbox] enabled in config but no backend wired - sandbox endpoints will return 503. Linux backend pending.");
-}
-
 const watcher = new Watcher(
   config.watchPath,
   [".DS_Store"],

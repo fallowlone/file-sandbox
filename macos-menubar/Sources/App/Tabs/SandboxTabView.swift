@@ -4,25 +4,17 @@ import AppKit
 struct SandboxTabView: View {
     @ObservedObject var store: SandboxStore
     @ObservedObject var settingsStore: SettingsStore
-    @State private var newSessionNetwork: Bool = false
-    @State private var didInitNetwork = false
 
     var body: some View {
         VStack(spacing: 0) {
             topStrip
             Divider()
-            if !settingsStore.sandboxEnabled {
+            if !store.sandboxEnabled {
                 Text("Sandbox is disabled in Settings")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 28)
-            } else if let err = store.loadError {
-                Text(err)
-                    .font(.caption)
-                    .foregroundColor(.red)
-                    .padding(14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
             } else if store.sessions.isEmpty {
                 emptyState
             } else {
@@ -30,7 +22,7 @@ struct SandboxTabView: View {
                     LazyVStack(spacing: 0) {
                         ForEach(store.sessions) { s in
                             SandboxRowView(session: s) {
-                                store.discard(s.id)
+                                store.discard(id: s.id)
                             }
                         }
                     }
@@ -38,13 +30,7 @@ struct SandboxTabView: View {
                 .frame(maxHeight: 520)
             }
         }
-        .onAppear {
-            store.fetch()
-            if !didInitNetwork {
-                newSessionNetwork = settingsStore.sandboxNetworkDefault
-                didInitNetwork = true
-            }
-        }
+        .onAppear { store.refreshEnabled() }
     }
 
     private var topStrip: some View {
@@ -63,12 +49,9 @@ struct SandboxTabView: View {
             }
             .buttonStyle(.plain)
             .disabled(!store.canOpen)
-            .help(store.canOpen ? "Pick a file and open it in a fresh sandbox VM" : "Install Tart to enable")
+            .help(store.canOpen ? "Pick a file and open it in a fresh sandbox VM" : "Enable sandbox in Settings to use this")
 
             Spacer()
-            Text("Network")
-                .font(.system(size: 11, weight: .medium))
-            AppSwitch(isOn: $newSessionNetwork)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -96,13 +79,13 @@ struct SandboxTabView: View {
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url {
-            store.create(filePath: url.path, sourceJobId: nil, network: newSessionNetwork) { _ in }
+            store.openSandbox(filePath: url.path)
         }
     }
 }
 
 private struct SandboxRowView: View {
-    let session: SandboxSession
+    let session: SessionRecord
     let onDiscard: () -> Void
 
     var body: some View {
@@ -118,7 +101,7 @@ private struct SandboxRowView: View {
                         .truncationMode(.middle)
                 }
                 HStack(spacing: 6) {
-                    Text(session.vmName)
+                    Text(String(session.id.uuidString.prefix(8)))
                         .font(.system(size: 9, design: .monospaced))
                         .foregroundColor(.secondary)
                         .padding(.horizontal, 5)
@@ -146,16 +129,10 @@ private struct SandboxRowView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 4) {
-                IconButton(symbol: "plus.viewfinder", help: "Show window") {
-                    // Future: focus the VM window. Spec leaves stub OK.
-                }
-                IconButton(symbol: "square.and.arrow.up", help: "Export") {
-                    // Future: export session output dir.
-                }
                 IconButton(symbol: "xmark.circle", help: "Discard", isDanger: true, action: onDiscard)
             }
 
-            SessionStatePill(status: session.status)
+            SessionStatePill(status: session.status.rawValue)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -203,12 +180,8 @@ private struct IconButton: View {
     }
 }
 
-private func ageString(from iso: String) -> String {
-    let formatter = ISO8601DateFormatter()
-    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    let date = formatter.date(from: iso) ?? ISO8601DateFormatter().date(from: iso)
-    guard let d = date else { return iso }
-    let delta = max(0, Int(Date().timeIntervalSince(d)))
+private func ageString(from date: Date) -> String {
+    let delta = max(0, Int(Date().timeIntervalSince(date)))
     if delta < 60 { return "\(delta)s" }
     if delta < 3600 { return "\(delta / 60)m" }
     if delta < 86_400 { return "\(delta / 3600)h" }

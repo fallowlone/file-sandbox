@@ -136,8 +136,6 @@ export function startUiServer(
       }
     })();
 
-    const sandboxInfo = { enabled: false, backendReady: false, activeSessions: 0 };
-
     res.json({
       ok: true,
       uptimeSec: Math.floor((Date.now() - metrics.startedAt) / 1000),
@@ -152,7 +150,6 @@ export function startUiServer(
         vt: config.vtEnabled,
       },
       localScanner: localScannerInfo,
-      sandbox: sandboxInfo,
     });
   });
 
@@ -206,15 +203,6 @@ export function startUiServer(
     watcherControl.setMode(requested);
     res.json({ ok: true, mode: requested });
   });
-
-  // Sandbox endpoints — backend pending Linux migration. Always 503 until wired.
-  const sandboxDisabled = (_req: Request, res: Response) =>
-    res.status(503).json({ error: "sandbox backend not configured" });
-  app.post("/api/sandbox/sessions", sandboxDisabled);
-  app.get("/api/sandbox/sessions", sandboxDisabled);
-  app.get("/api/sandbox/sessions/:id", sandboxDisabled);
-  app.delete("/api/sandbox/sessions/:id", sandboxDisabled);
-  app.post("/api/sandbox/sessions/:id/export", sandboxDisabled);
 
   app.delete("/api/jobs", (_req, res) => {
     try {

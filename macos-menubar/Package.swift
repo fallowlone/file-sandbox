@@ -11,7 +11,15 @@ let package = Package(
             path: "Sources/App",
             resources: [
                 .process("Resources")
+            ],
+            linkerSettings: [
+                .linkedFramework("Virtualization")
             ]
+        ),
+        .testTarget(
+            name: "SandboxTests",
+            dependencies: ["FileSandboxMenuBar"],
+            path: "Tests/SandboxTests"
         ),
     ]
 )
