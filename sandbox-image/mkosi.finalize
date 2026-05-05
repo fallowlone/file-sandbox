@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eux
+ROOT="$1"
+mkdir -p sandbox-image/build
+mksquashfs "$ROOT" sandbox-image/build/base.img \
+    -comp zstd -Xcompression-level 19 -no-progress -noappend
+cp "$ROOT"/boot/vmlinuz-* sandbox-image/build/vmlinuz
+cp "$ROOT"/boot/initrd.img-* sandbox-image/build/initrd.img
+sha256sum sandbox-image/build/base.img sandbox-image/build/vmlinuz \
+          sandbox-image/build/initrd.img > sandbox-image/build/SHA256SUMS
