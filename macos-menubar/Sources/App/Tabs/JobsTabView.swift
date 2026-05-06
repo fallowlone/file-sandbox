@@ -193,7 +193,9 @@ private struct JobRow: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 8)
-                if let pill = VerdictPill.forJobVerdict(
+                if let stage = job.stageEnum, stage != .done, stage != .error {
+                    StagePill(stage: stage)
+                } else if let pill = VerdictPill.forJobVerdict(
                     vt: job.vt_verdict,
                     pompelmi: job.pompelmi_verdict,
                     status: job.status
@@ -229,22 +231,7 @@ private struct JobRow: View {
                 }
             }
 
-            HStack(spacing: 6) {
-                if let pompelmi = job.pompelmi_verdict, !pompelmi.isEmpty {
-                    EngineCard(
-                        label: "Local",
-                        value: pompelmi,
-                        status: localEngineStatus(for: pompelmi)
-                    )
-                }
-                if let vt = job.vt_verdict, !vt.isEmpty {
-                    EngineCard(
-                        label: "VirusTotal",
-                        value: vt,
-                        status: engineStatus(for: vt)
-                    )
-                }
-            }
+            StageRow(job: job)
 
             HStack(spacing: 6) {
                 MetaPill(
@@ -320,24 +307,6 @@ private struct JobRow: View {
         case "clean":
             return VerdictPill(text: L.verdictBig("clean"), variant: .green, size: .big, symbol: "checkmark.circle.fill")
         default: return nil
-        }
-    }
-
-    private func engineStatus(for verdict: String?) -> EngineCard.Status {
-        switch (verdict ?? "").lowercased() {
-        case "clean":                       return .clean
-        case "infected", "malicious":       return .malicious
-        case "inconclusive":                return .warn
-        default:                            return .neutral
-        }
-    }
-
-    private func localEngineStatus(for verdict: String) -> EngineCard.Status {
-        switch verdict.lowercased() {
-        case "clean":     return .clean
-        case "malicious": return .malicious
-        case "error":     return .warn
-        default:          return .neutral
         }
     }
 
