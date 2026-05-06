@@ -185,9 +185,15 @@ class JobStore: ObservableObject {
         if !activeThreats.isEmpty {
             return "exclamationmark.shield.fill"
         }
-        if jobs.contains(where: { $0.status == "scanning" || $0.status == "in_quarantine" }) {
-            return "shield.lefthalf.filled"
-        }
+        // Newest in pipeline order wins so vt_poll dominates a parallel cache_check.
+        let activeStage = jobs
+            .compactMap(\.stageEnum)
+            .filter { ![.done].contains($0) }
+            .max(by: { lhs, rhs in
+                ScanStage.pipeline.firstIndex(of: lhs) ?? -1
+                  < ScanStage.pipeline.firstIndex(of: rhs) ?? -1
+            })
+        if let stage = activeStage { return stage.symbol }
         return "checkmark.shield.fill"
     }
 
