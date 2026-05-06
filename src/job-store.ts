@@ -20,6 +20,15 @@ export type JobStatus =
   | "cancelled"
   | "failed";
 
+export type ScanStage =
+  | "received"
+  | "cache_check"
+  | "local_scan"
+  | "vt_upload"
+  | "vt_poll"
+  | "done"
+  | "error";
+
 export type JobRow = {
   id: string;
   source_path: string;
@@ -29,6 +38,7 @@ export type JobRow = {
   status: JobStatus;
   vt_verdict: VirusVerdict | null;
   pompelmi_verdict: "clean" | "malicious" | "error" | null;
+  scan_stage: ScanStage | null;
   detail: string | null;
   created_at: number;
   updated_at: number;
@@ -68,6 +78,13 @@ export class JobStore {
       this.db.exec("ALTER TABLE jobs ADD COLUMN pompelmi_verdict TEXT");
     } catch (e) {
       // Already exists - sqlite throws "duplicate column name"
+      if (!String(e).includes("duplicate column name")) throw e;
+    }
+
+    // Idempotent column add for scan_stage
+    try {
+      this.db.exec("ALTER TABLE jobs ADD COLUMN scan_stage TEXT");
+    } catch (e) {
       if (!String(e).includes("duplicate column name")) throw e;
     }
   }
@@ -130,6 +147,15 @@ export class JobStore {
       .run(verdict, detail ?? null, now, jobId);
   }
 
+  setStage(jobId: string, stage: ScanStage): void {
+    const now = Date.now();
+    this.db
+      .prepare(
+        `UPDATE jobs SET scan_stage = ?, updated_at = ? WHERE id = ?`,
+      )
+      .run(stage, now, jobId);
+  }
+
   setRestored(jobId: string, finalPath: string) {
     const now = Date.now();
     this.db
@@ -151,7 +177,7 @@ export class JobStore {
   listRecent(limit = 100): JobRow[] {
     const rows = this.db
       .prepare(
-        `SELECT id, source_path, original_name, quarantine_path, final_path, status, vt_verdict, pompelmi_verdict, detail, created_at, updated_at
+        `SELECT id, source_path, original_name, quarantine_path, final_path, status, vt_verdict, pompelmi_verdict, scan_stage, detail, created_at, updated_at
          FROM jobs ORDER BY created_at DESC LIMIT ?`,
       )
       .all(limit) as JobRow[];
@@ -161,7 +187,7 @@ export class JobStore {
   getJob(jobId: string): JobRow | undefined {
     return this.db
       .prepare(
-        `SELECT id, source_path, original_name, quarantine_path, final_path, status, vt_verdict, pompelmi_verdict, detail, created_at, updated_at
+        `SELECT id, source_path, original_name, quarantine_path, final_path, status, vt_verdict, pompelmi_verdict, scan_stage, detail, created_at, updated_at
          FROM jobs WHERE id = ?`,
       )
       .get(jobId) as JobRow | undefined;
@@ -185,7 +211,7 @@ export class JobStore {
   listInconclusiveOlderThan(cutoffMs: number): JobRow[] {
     return this.db
       .prepare(
-        `SELECT id, source_path, original_name, quarantine_path, final_path, status, vt_verdict, pompelmi_verdict, detail, created_at, updated_at
+        `SELECT id, source_path, original_name, quarantine_path, final_path, status, vt_verdict, pompelmi_verdict, scan_stage, detail, created_at, updated_at
          FROM jobs
          WHERE status = 'quarantine_kept' AND vt_verdict = 'inconclusive' AND created_at < ?`,
       )

@@ -232,6 +232,7 @@ class Watcher {
 
         const jobId = randomUUID();
         this.jobStore?.insertReceived(jobId, filepath, basename(filepath));
+        this.jobStore?.setStage(jobId, "received");
 
         try {
           await chmodAsync(filepath, 0o444).catch(() => {});
@@ -251,6 +252,7 @@ class Watcher {
           );
 
           if (this.mode === "scan_paused") {
+            this.jobStore?.setStage(jobId, "done");
             this.jobStore?.setScanResult(jobId, {
               verdict: "inconclusive",
               message: "Scanning paused at intake",
@@ -261,6 +263,7 @@ class Watcher {
 
           const noScanners = !this.localScanner && !this.vtEnabled;
           if (noScanners) {
+            this.jobStore?.setStage(jobId, "done");
             this.jobStore?.setScanResult(jobId, {
               verdict: "inconclusive",
               message: "No active scanners - kept in quarantine",
@@ -273,6 +276,7 @@ class Watcher {
 
           // Local pompelmi stage (defense-in-depth)
           if (this.localScanner) {
+            this.jobStore?.setStage(jobId, "local_scan");
             const localController = new AbortController();
             this.scanControllers.set(jobId, localController);
             let local;
@@ -284,6 +288,7 @@ class Watcher {
             this.jobStore?.setPompelmiVerdict(jobId, local.verdict, local.message);
 
             if (local.verdict === "malicious") {
+              this.jobStore?.setStage(jobId, "done");
               this.jobStore?.setScanResult(jobId, {
                 verdict: "infected",
                 message: `Local scanner: ${local.message}`,
@@ -294,6 +299,7 @@ class Watcher {
 
             if (local.verdict === "error") {
               if (this.pompelmiFailureMode === "inconclusive") {
+                this.jobStore?.setStage(jobId, "done");
                 this.jobStore?.setScanResult(jobId, {
                   verdict: "inconclusive",
                   message: `Local scanner failed: ${local.message}`,
@@ -308,6 +314,7 @@ class Watcher {
           }
 
           if (!this.vtEnabled) {
+            this.jobStore?.setStage(jobId, "done");
             this.jobStore?.setScanResult(jobId, {
               verdict: "inconclusive",
               message: "VT disabled - no cloud scan ran",
@@ -322,6 +329,7 @@ class Watcher {
               verdict: "oversized" as const,
               message: `File exceeds scan limit (${this.maxScanBytes} bytes); not sent to VirusTotal. Restore or delete from the UI.`,
             };
+            this.jobStore?.setStage(jobId, "done");
             this.jobStore?.setScanResult(jobId, result);
             console.log(
               `Oversized - kept in quarantine: ${quarantineFilePath}`,
@@ -329,6 +337,7 @@ class Watcher {
             return;
           }
 
+          this.jobStore?.setStage(jobId, "cache_check");
           const cached = await cacheCheck(quarantineFilePath);
           if (cached) {
             console.log(`vt-cache hit: ${cached} (skipped upload)`);
@@ -336,6 +345,7 @@ class Watcher {
               verdict: cached as import("./virus-checker.ts").VirusVerdict,
               message: `From local cache (SHA-256 match)`,
             };
+            this.jobStore?.setStage(jobId, "done");
             this.jobStore?.setScanResult(jobId, result);
             if (result.verdict === "clean") {
               const destPath = await this.fileMover.resolveRestoreDestination(
@@ -369,6 +379,7 @@ class Watcher {
             result = await this.virusChecker.check(
               quarantineFilePath,
               controller.signal,
+              (stage) => this.jobStore?.setStage(jobId, stage),
             );
           } finally {
             metrics.decScan();
@@ -385,6 +396,7 @@ class Watcher {
           console.log(`VirusTotal: ${result.verdict} - ${result.message}`);
 
           if (result.message === "Cancelled by user") {
+            this.jobStore?.setStage(jobId, "done");
             this.jobStore?.cancelJob(jobId);
             console.log(
               `Scan cancelled - keeping in quarantine: ${quarantineFilePath}`,
@@ -392,6 +404,7 @@ class Watcher {
             return;
           }
 
+          this.jobStore?.setStage(jobId, "done");
           this.jobStore?.setScanResult(jobId, result);
 
           if (result.verdict === "clean") {
@@ -419,6 +432,9 @@ class Watcher {
             );
           }
         } catch (error) {
+          try {
+            this.jobStore?.setStage(jobId, "error");
+          } catch { /* ignore — best effort */ }
           metrics.setLastError(String(error));
           console.log(`Failed processing ${filepath}: ${error}`);
           this.jobStore?.fail(jobId, String(error));
