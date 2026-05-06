@@ -232,6 +232,7 @@ class Watcher {
 
         const jobId = randomUUID();
         this.jobStore?.insertReceived(jobId, filepath, basename(filepath));
+        this.jobStore?.setStage(jobId, "received");
 
         try {
           await chmodAsync(filepath, 0o444).catch(() => {});

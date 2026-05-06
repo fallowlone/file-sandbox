@@ -5,6 +5,7 @@ import Watcher from "./watcher.ts";
 class StubJobStore {
   results: unknown[] = [];
   insertReceived() {}
+  setStage() {}
   setInQuarantine() {}
   setScanning() {}
   setScanResult(_jobId: string, r: unknown) { this.results.push(r); }
