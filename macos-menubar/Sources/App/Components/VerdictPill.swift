@@ -40,27 +40,38 @@ struct VerdictPill: View {
 }
 
 extension VerdictPill {
-    /// Map a job's `vt_verdict` string + status to a pill variant + label.
-    static func forJobVerdict(verdict: String?, status: String) -> VerdictPill? {
+    /// Map both engine verdicts + job status to a collapsed-row pill.
+    ///
+    /// Priority:
+    ///   1. Either verdict is `infected` / `malicious`             → red "infected"
+    ///   2. status is `scanning` / `received` / `in_quarantine`    → blue "scanning"
+    ///   3. vt_verdict == `inconclusive` / `unclear`               → orange "inconclusive"
+    ///   4. vt_verdict == `oversized`                              → grey "oversized"
+    ///   5. status == `restored` or vt_verdict == `clean`          → green "clean"
+    ///   6. otherwise                                              → nil
+    static func forJobVerdict(vt: String?, pompelmi: String?, status: String) -> VerdictPill? {
+        let v = (vt ?? "").lowercased()
+        let p = (pompelmi ?? "").lowercased()
+
+        if v == "infected" || v == "malicious" || p == "malicious" {
+            return VerdictPill(text: L.verdict("infected"), variant: .red, size: .mini, symbol: "exclamationmark.triangle.fill")
+        }
         if status == "scanning" || status == "received" {
             return VerdictPill(text: L.verdict("scanning"), variant: .blue, size: .mini, symbol: "hourglass")
         }
         if status == "in_quarantine" {
             return VerdictPill(text: L.verdict("queued"), variant: .blue, size: .mini, symbol: "tray")
         }
-        guard let v = verdict?.lowercased() else { return nil }
-        switch v {
-        case "infected", "malicious":
-            return VerdictPill(text: L.verdict(v), variant: .red, size: .mini, symbol: "exclamationmark.triangle.fill")
-        case "inconclusive", "unclear":
+        if v == "inconclusive" || v == "unclear" {
             return VerdictPill(text: L.verdict("inconclusive"), variant: .orange, size: .mini, symbol: "questionmark.circle.fill")
-        case "oversized":
-            return VerdictPill(text: L.verdict("oversized"), variant: .grey, size: .mini, symbol: "arrow.down.circle")
-        case "clean":
-            return VerdictPill(text: L.verdict("clean"), variant: .green, size: .mini, symbol: "checkmark.circle.fill")
-        default:
-            return VerdictPill(text: LocalizedStringKey(v), variant: .grey, size: .mini)
         }
+        if v == "oversized" {
+            return VerdictPill(text: L.verdict("oversized"), variant: .grey, size: .mini, symbol: "arrow.down.circle")
+        }
+        if v == "clean" || status == "restored" {
+            return VerdictPill(text: L.verdict("clean"), variant: .green, size: .mini, symbol: "checkmark.circle.fill")
+        }
+        return nil
     }
 }
 

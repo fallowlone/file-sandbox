@@ -193,7 +193,11 @@ private struct JobRow: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 8)
-                if let pill = VerdictPill.forJobVerdict(verdict: job.vt_verdict, status: job.status) {
+                if let pill = VerdictPill.forJobVerdict(
+                    vt: job.vt_verdict,
+                    pompelmi: job.pompelmi_verdict,
+                    status: job.status
+                ) {
                     pill
                 }
                 Text(ageString(from: job.created_at))
