@@ -36,6 +36,7 @@ struct SandboxJob: Codable, Identifiable, Equatable {
     let status: String
     let vt_verdict: String?
     let pompelmi_verdict: String?
+    let scan_stage: String?
     let detail: String?
     let final_path: String?
     let created_at: Int
