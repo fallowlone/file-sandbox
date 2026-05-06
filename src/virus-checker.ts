@@ -94,6 +94,7 @@ export async function virusCheckFile(
   path: PathOrFileDescriptor,
   signal: AbortSignal | undefined,
   opts: VirusCheckOptions,
+  onStage?: (stage: "vt_upload" | "vt_poll") => void,
 ): Promise<VirusCheckResult> {
   try {
     const st = fs.statSync(path);
@@ -129,6 +130,7 @@ export async function virusCheckFile(
   for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
     let resp: Response;
     try {
+      onStage?.("vt_upload");
       resp = await fetch(apiUrl + "/files", {
         method: "POST",
         headers: { "x-apikey": apiKey },
@@ -214,6 +216,8 @@ export async function virusCheckFile(
 
   const maxPolls = Number(process.env.VT_MAX_POLLS) || 20;
   const pollMs = Number(process.env.VT_POLL_INTERVAL_MS) || 15000;
+
+  onStage?.("vt_poll");
 
   for (let i = 0; i < maxPolls; i++) {
     try {
@@ -413,6 +417,7 @@ class VirusChecker {
   async check(
     path: PathOrFileDescriptor,
     signal?: AbortSignal,
+    onStage?: (stage: "vt_upload" | "vt_poll") => void,
   ): Promise<VirusCheckResult> {
     const opts = { maxBytes: this.maxScanBytes };
     if (this.useSeparateVtProcess && typeof path === "string") {
@@ -423,7 +428,7 @@ class VirusChecker {
         this.maxScanBytes,
       );
     }
-    return virusCheckFile(this.apiKey, path, signal, opts);
+    return virusCheckFile(this.apiKey, path, signal, opts, onStage);
   }
 }
 
