@@ -226,11 +226,20 @@ private struct JobRow: View {
             }
 
             HStack(spacing: 6) {
-                EngineCard(
-                    label: "VirusTotal",
-                    value: job.vt_verdict ?? "-",
-                    status: engineStatus(for: job.vt_verdict)
-                )
+                if let pompelmi = job.pompelmi_verdict, !pompelmi.isEmpty {
+                    EngineCard(
+                        label: "Local",
+                        value: pompelmi,
+                        status: localEngineStatus(for: pompelmi)
+                    )
+                }
+                if let vt = job.vt_verdict, !vt.isEmpty {
+                    EngineCard(
+                        label: "VirusTotal",
+                        value: vt,
+                        status: engineStatus(for: vt)
+                    )
+                }
             }
 
             HStack(spacing: 6) {
@@ -316,6 +325,15 @@ private struct JobRow: View {
         case "infected", "malicious":       return .malicious
         case "inconclusive":                return .warn
         default:                            return .neutral
+        }
+    }
+
+    private func localEngineStatus(for verdict: String) -> EngineCard.Status {
+        switch verdict.lowercased() {
+        case "clean":     return .clean
+        case "malicious": return .malicious
+        case "error":     return .warn
+        default:          return .neutral
         }
     }
 
