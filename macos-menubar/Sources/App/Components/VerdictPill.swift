@@ -74,20 +74,3 @@ extension VerdictPill {
         return nil
     }
 }
-
-/// Sandbox session state pill (running / starting / stopped / failed / discarded / error).
-/// Same look as VerdictPill mini; separate factory for clarity.
-struct SessionStatePill: View {
-    let status: String
-    var body: some View {
-        switch status {
-        case "running":   VerdictPill(text: L.session("running"),   variant: .green, size: .mini)
-        case "starting":  VerdictPill(text: L.session("starting"),  variant: .blue,  size: .mini)
-        case "stopped":   VerdictPill(text: L.session("stopped"),   variant: .red,   size: .mini)
-        case "failed":    VerdictPill(text: L.session("failed"),    variant: .red,   size: .mini)
-        case "discarded": VerdictPill(text: L.session("discarded"), variant: .grey,  size: .mini)
-        case "error":     VerdictPill(text: L.session("error"),     variant: .red,   size: .mini)
-        default:          EmptyView()
-        }
-    }
-}

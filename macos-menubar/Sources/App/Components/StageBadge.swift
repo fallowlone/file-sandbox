@@ -20,6 +20,8 @@ struct StageBadge: View {
                 .font(.system(size: 9, weight: .semibold))
             Text(displayText)
                 .font(.system(size: 10, weight: .medium))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
                 .strikethrough(isSkipped, color: Theme.separator)
         }
         .padding(.horizontal, 9)
@@ -31,6 +33,7 @@ struct StageBadge: View {
                 .strokeBorder(borderTint, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private var displayText: String {

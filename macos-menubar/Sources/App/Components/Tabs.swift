@@ -2,15 +2,13 @@ import SwiftUI
 
 enum AppTab: Int, CaseIterable, Identifiable {
     case jobs = 0
-    case sandbox = 1
-    case settings = 2
+    case settings = 1
 
     var id: Int { rawValue }
 
     var title: LocalizedStringKey {
         switch self {
         case .jobs:     return "Jobs"
-        case .sandbox:  return "Sandbox"
         case .settings: return "Settings"
         }
     }

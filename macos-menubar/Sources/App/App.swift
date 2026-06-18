@@ -5,7 +5,6 @@ import UserNotifications
 struct FileSandboxMenuBarApp: App {
     @StateObject private var store = JobStore()
     @StateObject private var settingsStore = SettingsStore()
-    @StateObject private var sandboxStore = SandboxStore()
     @State private var notifiedAtLaunch = false
 
     @AppStorage("filesandbox.locale") private var localeRaw: String = AppLocale.auto.rawValue
@@ -24,12 +23,9 @@ struct FileSandboxMenuBarApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuBarContentView(store: store, settingsStore: settingsStore, sandboxStore: sandboxStore)
+            MenuBarContentView(store: store, settingsStore: settingsStore)
                 .environment(\.locale, resolvedLocale(for: appLocale) ?? Locale.current)
                 .textSelection(.disabled)
-                .onAppear {
-                    sandboxStore.refreshEnabled()
-                }
         } label: {
             Image(systemName: store.iconName)
                 .symbolRenderingMode(.hierarchical)

@@ -5,33 +5,31 @@ LABEL="dev.artemmac.filesandbox"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 LOG_DIR="$PROJECT_DIR/logs"
+DAEMON_DIR="$PROJECT_DIR/daemon"
+BINARY="$DAEMON_DIR/target/release/file-sandbox-daemon"
 
-# ── Node path ────────────────────────────────────────────────────────────────
-NODE_PATH="$(which node 2>/dev/null || true)"
-
-# nvm fallback — pick highest installed version
-if [ -z "$NODE_PATH" ] && [ -d "$HOME/.nvm/versions/node" ]; then
-  LATEST=$(ls "$HOME/.nvm/versions/node" | sort -V | tail -1)
-  NODE_PATH="$HOME/.nvm/versions/node/$LATEST/bin/node"
+# ── Binary ───────────────────────────────────────────────────────────────────
+# Build the release binary if it is not already present.
+if [ ! -x "$BINARY" ]; then
+  echo "Release binary not found — building..."
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "Error: cargo not found. Install Rust (https://rustup.rs) or build the binary manually:"
+    echo "  cd $DAEMON_DIR && cargo build --release"
+    exit 1
+  fi
+  ( cd "$DAEMON_DIR" && cargo build --release )
 fi
 
-if [ -z "$NODE_PATH" ] || [ ! -f "$NODE_PATH" ]; then
-  echo "Error: node not found. Ensure node is in PATH or nvm is installed."
+if [ ! -x "$BINARY" ]; then
+  echo "Error: build did not produce $BINARY."
   exit 1
 fi
 
-NODE_VERSION=$("$NODE_PATH" --version)
-NODE_MAJOR=$(echo "$NODE_VERSION" | sed 's/v\([0-9]*\).*/\1/')
-if [ "$NODE_MAJOR" -lt 20 ]; then
-  echo "Error: Node.js 20+ required (found $NODE_VERSION)."
-  exit 1
-fi
-
-echo "Using node: $NODE_PATH ($NODE_VERSION)"
+echo "Using binary: $BINARY"
 
 # ── Preflight ────────────────────────────────────────────────────────────────
-if [ ! -f "$PROJECT_DIR/.env" ]; then
-  echo "Warning: $PROJECT_DIR/.env not found — daemon will fail to start without it."
+if [ ! -f "$PROJECT_DIR/config.json" ]; then
+  echo "Warning: $PROJECT_DIR/config.json not found — daemon will fail to start without it."
 fi
 
 mkdir -p "$LOG_DIR"
@@ -46,8 +44,7 @@ cat > "$PLIST" << EOF
     <string>$LABEL</string>
     <key>ProgramArguments</key>
     <array>
-        <string>$NODE_PATH</string>
-        <string>src/index.ts</string>
+        <string>$BINARY</string>
     </array>
     <key>WorkingDirectory</key>
     <string>$PROJECT_DIR</string>
@@ -86,6 +83,7 @@ fi
 
 echo ""
 echo "✓ Installed: $PLIST"
+echo "  Binary:    $BINARY"
 echo "  Logs:      $LOG_DIR/filesandbox.log"
 echo "  Status:    launchctl list | grep $LABEL"
 echo "  Stop:      launchctl stop $LABEL"

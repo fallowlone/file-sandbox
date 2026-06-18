@@ -84,6 +84,7 @@ macos-menubar/AppIcon.iconset/
 
 # Rust build artifacts
 vt-cache/target/
+daemon/target/
 es-daemon/.build/
 
 # dotenv environment variable files
@@ -158,6 +159,7 @@ dist
 # File-sandbox personal / transient
 .claude/
 .superpowers/
+.refine/
 entities.json
 mempalace.yaml
 src/*.js

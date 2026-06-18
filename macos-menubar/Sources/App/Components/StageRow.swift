@@ -7,9 +7,11 @@ struct StageRow: View {
     let job: SandboxJob
 
     var body: some View {
-        HStack(spacing: 6) {
-            ForEach(ScanStage.pipeline, id: \.self) { stage in
-                StageBadge(stage: stage, state: state(for: stage))
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(ScanStage.pipeline, id: \.self) { stage in
+                    StageBadge(stage: stage, state: state(for: stage))
+                }
             }
         }
     }

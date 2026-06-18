@@ -4,7 +4,6 @@ import AppKit
 struct MenuBarContentView: View {
     @ObservedObject var store: JobStore
     @ObservedObject var settingsStore: SettingsStore
-    @ObservedObject var sandboxStore: SandboxStore
 
     @AppStorage("filesandbox.selectedTab") private var selectedTab: Int = 0
 
@@ -14,8 +13,7 @@ struct MenuBarContentView: View {
             AppTabs(
                 selection: $selectedTab,
                 counts: [
-                    .jobs: store.visibleJobCount,
-                    .sandbox: sandboxStore.activeCount
+                    .jobs: store.visibleJobCount
                 ]
             )
             tabBody
@@ -31,10 +29,8 @@ struct MenuBarContentView: View {
     private var tabBody: some View {
         switch AppTab(rawValue: selectedTab) ?? .jobs {
         case .jobs:
-            JobsTabView(store: store, sandboxStore: sandboxStore, settingsStore: settingsStore)
+            JobsTabView(store: store, settingsStore: settingsStore)
                 .onAppear { store.fetch() }
-        case .sandbox:
-            SandboxTabView(store: sandboxStore, settingsStore: settingsStore)
         case .settings:
             SettingsTabView(settingsStore: settingsStore, store: store)
         }

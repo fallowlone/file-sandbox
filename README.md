@@ -3,17 +3,20 @@
 Automatic quarantine and VirusTotal scanning for files dropped into a watched directory.  
 Catches threats before they reach your system — with a native macOS menu bar app for real-time monitoring.
 
+The daemon is a single native **Rust** binary (`file-sandbox-daemon`). No Node.js runtime required.
+
 ---
 
 ## Features
 
-- **Sub-5ms lockdown** — `fs.watch` (kqueue) fires instantly; file gets `chmod 0o000` + `com.apple.quarantine` xattr before anything else can run it
+- **Sub-5ms lockdown** — the file watcher fires instantly; file gets `chmod 0o000` + `com.apple.quarantine` xattr before anything else can run it
+- **Local ClamAV scan** — every quarantined file is streamed to `clamd` before VirusTotal
 - **VirusTotal scanning** — uploads to VT API, polls until verdict
-- **SHA-256 verdict cache** — Rust binary skips re-uploading known files (saves VT API quota)
+- **SHA-256 verdict cache** — in-process cache skips re-uploading known files (saves VT API quota)
 - **Quarantine pipeline** — infected/inconclusive files stay locked; clean files restored
 - **Scan cancellation** — cancel in-progress scan from menu bar; file stays in quarantine
 - **macOS menu bar app** — native SwiftUI, live status per file, scanning animation, threat counter
-- **Auto-start** — LaunchAgent runs daemon at login, restarts on crash
+- **Auto-start** — LaunchAgent runs the binary at login, restarts on crash
 - **LaunchAgent monitor** — detects new persistence entries in `~/Library/LaunchAgents` and system dirs
 - **Endpoint Security daemon** (optional) — kernel-level `AUTH_EXEC` deny for files in watch dir
 
@@ -25,15 +28,17 @@ Catches threats before they reach your system — with a native macOS menu bar a
  Drop file
      │
      ▼
- fs.watch (kqueue, ~1–5ms)
+ file watcher (notify, ~1–5ms)
      │
      ├─ chmod 0o000          ← no read / no exec
      └─ quarantine xattr     ← Gatekeeper blocks if user tries to run
 
- chokidar (awaitWriteFinish, ~2s)
+ stability gate (~2s, size stable)
      │
      ├─ chmod 0o444          ← read-only for processing
-     ├─ vt-cache check       ← Rust: SHA-256 lookup
+     ├─ move to quarantine
+     ├─ local clamd scan     ← INSTREAM over unix socket
+     ├─ vt-cache check       ← in-process SHA-256 lookup
      │     hit ──────────────────────────────────► use cached verdict
      │     miss
      │       │
@@ -41,13 +46,13 @@ Catches threats before they reach your system — with a native macOS menu bar a
      │   VirusTotal API
      │       │  upload + poll
      │       ▼
-     ├─ vt-cache store       ← Rust: persist SHA-256 → verdict
+     ├─ vt-cache store       ← persist SHA-256 → verdict
      │
-     ├─ clean   ──► restore to watch dir (skip re-scan via restoringPaths set)
+     ├─ clean   ──► restore to watch dir
      └─ infected ─► keep in quarantine
 
- SQLite (better-sqlite3)     ← job log, survives restarts
- Express /api/jobs           ← JSON API
+ SQLite (rusqlite)           ← job log, survives restarts
+ axum /api/jobs              ← JSON API + HTML dashboard
  SwiftUI MenuBarExtra        ← polls API every 5s
 ```
 
@@ -57,8 +62,8 @@ Catches threats before they reach your system — with a native macOS menu bar a
 
 | Tool               | Version                    |
 | ------------------ | -------------------------- |
-| Node.js            | 20.6+                      |
 | Rust / Cargo       | 1.70+                      |
+| ClamAV (`clamd`)   | local scanner (optional)   |
 | macOS              | 13 Ventura+ (menu bar app) |
 | VirusTotal API key | Free tier works            |
 
@@ -69,10 +74,9 @@ Catches threats before they reach your system — with a native macOS menu bar a
 ```bash
 git clone https://github.com/your-username/file-sandbox.git
 cd file-sandbox
-npm install
 
-# Build Rust verdict cache
-cd vt-cache && cargo build --release && cd ..
+# Build the daemon
+cd daemon && cargo build --release && cd ..
 
 # Build menu bar app
 cd macos-menubar && bash build.sh && cd ..
@@ -111,14 +115,14 @@ Full template (same as `config.example.json`):
 | --------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | `apiToken`                  | If non-empty, HTTP API requires `Authorization: Bearer …` or `X-Filesandbox-Token` (except `/api/health`). |
 | `watchRecursive`            | Watch subfolders (`false` = only direct children of `watchPath`).                                          |
-| `maxScanBytes`              | Skip VT upload above this size; file stays quarantined as oversized (default 400 MiB).                     |
+| `maxScanBytes`              | Skip VT upload above this size; file stays quarantined as oversized (default 400 MiB).                     |
 | `maxConcurrentScans`        | Parallel VT pipelines (minimum 1).                                                                         |
-| `useSeparateVtProcess`      | Run VT upload/analysis in a child Node process.                                                            |
+| `useSeparateVtProcess`      | No-op in the Rust daemon (VT runs in-process). Kept for config compatibility.                              |
 | `inconclusiveRetentionDays` | `0` = never auto-delete inconclusive quarantine; `N` = hourly sweep deletes after N days.                  |
 
 Get a free VirusTotal API key at [virustotal.com](https://www.virustotal.com/gui/join-us).
 
-> **env fallback** — Docker / CI can override: `VT_API_KEY`, `FILESANDBOX_API_TOKEN`, `WATCH_PATH`, `QUARANTINE_PATH`, `DATABASE_PATH`, `HTTP_PORT`, `HTTP_HOST`, `WATCH_RECURSIVE`, `MAX_SCAN_BYTES`, `MAX_CONCURRENT_SCANS`, `USE_SEPARATE_VT_PROCESS`, `INCONCLUSIVE_RETENTION_DAYS`. Optional: `FILESANDBOX_MASTER_KEY` (encrypt `config.json` at rest), `FILESANDBOX_ALLOW_LAN=1` (allow binding `httpHost` to non-loopback).
+> **env fallback** — CI can override: `VT_API_KEY`, `FILESANDBOX_API_TOKEN`, `WATCH_PATH`, `QUARANTINE_PATH`, `DATABASE_PATH`, `HTTP_PORT`, `HTTP_HOST`, `WATCH_RECURSIVE`, `MAX_SCAN_BYTES`, `MAX_CONCURRENT_SCANS`, `INCONCLUSIVE_RETENTION_DAYS`. Optional: `FILESANDBOX_MASTER_KEY` (encrypt `config.json` at rest), `FILESANDBOX_ALLOW_LAN=1` (allow binding `httpHost` to non-loopback).
 
 ---
 
@@ -127,13 +131,14 @@ Get a free VirusTotal API key at [virustotal.com](https://www.virustotal.com/gui
 ### Development
 
 ```bash
-node src/index.ts          # uses config.json
+./daemon/target/release/file-sandbox-daemon   # uses config.json in cwd
 ```
 
 ### Auto-start (recommended)
 
 ```bash
-# Install as LaunchAgent — starts at login, restarts on crash
+# Install as LaunchAgent — builds the release binary if needed,
+# starts at login, restarts on crash
 bash scripts/install-launchagent.sh
 
 # Logs
@@ -156,33 +161,15 @@ cd macos-menubar && bash build.sh && cd ..
 open macos-menubar/FileSandboxMenuBar.app
 ```
 
-Settings has two tabs: **General** (paths, network, `apiToken`, VT key) and **Watch & scan** (`watchRecursive`, limits, child process, inconclusive retention).  
-Use env `FILE_SANDBOX_PORT` if the daemon HTTP port is not `3847`.
-
-### Docker
-
-```bash
-cp config.example.json .env.docker  # fill in keys
-docker compose up
-```
+Two tabs: **Jobs** (live per-file status) and **Settings** (paths, scanners, limits, tokens).
 
 ---
 
-## Verdict cache (Rust)
+## Verdict cache
 
-The `vt-cache` binary computes SHA-256 of each file and caches VT verdicts locally.  
-Files with the same content are never uploaded twice.
-
-```bash
-# Manual use
-vt-cache/target/release/vt-cache check  /path/to/file   # → clean / infected / miss
-vt-cache/target/release/vt-cache store  /path/to/file clean
-vt-cache/target/release/vt-cache list
-vt-cache/target/release/vt-cache clear
-
-# Custom DB path
-VT_CACHE_DB=/tmp/test.db vt-cache check /path/to/file
-```
+The daemon computes the SHA-256 of each file and caches VT verdicts in a local SQLite DB
+(`$VT_CACHE_DB` or `$HOME/.config/filesandbox/vt-cache.db`). Files with the same content are
+never uploaded twice. The cache is fully in-process — no separate binary to run.
 
 ---
 
@@ -192,9 +179,10 @@ VT_CACHE_DB=/tmp/test.db vt-cache check /path/to/file
 | ---------------------------- | ------------------------------------------- | ------------------------------------------ |
 | `chmod 0o000`                | Blocks all access ~1–5ms after file appears | Accidental double-click, browser auto-open |
 | `com.apple.quarantine` xattr | Gatekeeper prompts before execution         | Standard delivery vectors                  |
+| Local ClamAV scan            | `clamd` signature scan before VT            | Known malware, offline                     |
 | VirusTotal scan              | 70+ AV engines                              | Known malware signatures                   |
 | Quarantine directory         | 0o444 read-only, separate path              | Lateral movement from quarantine           |
-| LaunchAgent monitor          | chokidar on `~/Library/LaunchAgents`        | Persistence detection                      |
+| LaunchAgent monitor          | watches `~/Library/LaunchAgents`            | Persistence detection                      |
 | Endpoint Security daemon     | Kernel `AUTH_EXEC` deny (optional)          | Targeted execution bypass                  |
 
 ### Endpoint Security daemon (optional)
@@ -208,35 +196,7 @@ sudo bash scripts/install-es-daemon.sh
 
 ---
 
-## Project structure
-
-```
-file-sandbox/
-├── src/                    TypeScript daemon
-│   ├── index.ts            entrypoint, wires all modules
-│   ├── config.ts           config.json + env var loader
-│   ├── watcher.ts          fs.watch + chokidar pipeline
-│   ├── virus-checker.ts    VirusTotal upload + polling
-│   ├── vt-cache.ts         Rust binary wrapper
-│   ├── file-mover.ts       quarantine / restore
-│   ├── job-store.ts        SQLite job log
-│   ├── ui-server.ts        Express REST API + HTML dashboard
-│   └── launch-agent-monitor.ts  persistence detection
-├── vt-cache/               Rust — SHA-256 verdict cache
-├── macos-menubar/          Swift — native menu bar app
-├── es-daemon/              Swift — Endpoint Security daemon
-├── scripts/                install / uninstall helpers
-├── docker-compose.yml
-└── config.example.json     copy → config.json, fill in keys
-```
-
----
-
-## License
-
-MIT
-
-## Local scanner (pompelmi / ClamAV)
+## Local scanner (ClamAV)
 
 By default the daemon runs a local ClamAV scan on every quarantined file before sending it to VirusTotal. Install ClamAV on the host:
 
@@ -255,6 +215,32 @@ To disable the local scanner, set `pompelmiEnabled: false` in `config.json`. To 
 
 The daemon refuses to start if `pompelmiEnabled=true` and the configured socket is unreachable. Check `/api/health` for `localScanner.socketReachable`.
 
-## Isolated open-file sandbox
+---
 
-Backend pending Linux migration. The legacy macOS Tart-VM backend was removed on 2026-05-05; a Linux-based replacement is being designed for stronger isolation and lower disk cost. Until it lands, `sandboxEnabled` defaults to `false` and `/api/sandbox/sessions` returns `503`.
+## Project structure
+
+```
+file-sandbox/
+├── daemon/                 Rust daemon
+│   └── src/
+│       ├── main.rs             entrypoint, wires all modules
+│       ├── config.rs           config.json + env var loader
+│       ├── watcher.rs          notify + stability pipeline
+│       ├── virus_checker.rs    VirusTotal upload + polling
+│       ├── vt_cache.rs         in-process SHA-256 verdict cache
+│       ├── local_scanner.rs    clamd INSTREAM client
+│       ├── file_mover.rs       quarantine / restore
+│       ├── job_store.rs        SQLite job log
+│       ├── ui_server.rs        axum REST API + HTML dashboard
+│       └── launch_agent_monitor.rs  persistence detection
+├── macos-menubar/          Swift — native menu bar app
+├── es-daemon/              Swift — Endpoint Security daemon
+├── scripts/                install / uninstall helpers
+└── config.example.json     copy → config.json, fill in keys
+```
+
+---
+
+## License
+
+MIT
