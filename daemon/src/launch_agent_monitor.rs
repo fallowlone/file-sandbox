@@ -74,10 +74,7 @@ fn log_kind(kind: LaunchAgentEventKind, path: &str) {
 /// Start watching `paths` for persistence changes. The returned watcher must be
 /// kept alive for monitoring to continue. `on_event` is called for every
 /// add/modify/remove (hidden files are ignored, matching the TS dotfile filter).
-pub fn start_launch_agent_monitor<F>(
-    paths: Vec<PathBuf>,
-    on_event: F,
-) -> Result<RecommendedWatcher>
+pub fn start_launch_agent_monitor<F>(paths: Vec<PathBuf>, on_event: F) -> Result<RecommendedWatcher>
 where
     F: Fn(LaunchAgentEvent) + Send + Sync + 'static,
 {
@@ -92,14 +89,20 @@ where
                 return;
             }
         };
-        let Some(kind) = classify_event(&event.kind) else { return };
+        let Some(kind) = classify_event(&event.kind) else {
+            return;
+        };
         for path in event.paths {
             if is_hidden(&path) {
                 continue;
             }
             let path_str = path.to_string_lossy().into_owned();
             log_kind(kind, &path_str);
-            cb(LaunchAgentEvent { kind, path: path_str, at: now_ms() });
+            cb(LaunchAgentEvent {
+                kind,
+                path: path_str,
+                at: now_ms(),
+            });
         }
     })?;
 
@@ -112,7 +115,10 @@ where
     }
 
     let joined: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
-    eprintln!("[SECURITY] Watching launch agent dirs: {}", joined.join(", "));
+    eprintln!(
+        "[SECURITY] Watching launch agent dirs: {}",
+        joined.join(", ")
+    );
     Ok(watcher)
 }
 
@@ -135,7 +141,10 @@ mod tests {
             classify_event(&EventKind::Remove(RemoveKind::File)),
             Some(LaunchAgentEventKind::Removed)
         );
-        assert_eq!(classify_event(&EventKind::Access(notify::event::AccessKind::Any)), None);
+        assert_eq!(
+            classify_event(&EventKind::Access(notify::event::AccessKind::Any)),
+            None
+        );
     }
 
     #[test]

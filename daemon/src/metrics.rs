@@ -43,7 +43,10 @@ impl Metrics {
     }
 
     pub fn last_error(&self) -> Option<String> {
-        self.last_error.lock().expect("metrics last_error poisoned").clone()
+        self.last_error
+            .lock()
+            .expect("metrics last_error poisoned")
+            .clone()
     }
 }
 

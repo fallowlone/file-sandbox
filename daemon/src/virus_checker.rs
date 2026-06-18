@@ -55,7 +55,12 @@ pub struct VirusCheckResult {
 
 impl VirusCheckResult {
     fn inconclusive(message: impl Into<String>) -> Self {
-        Self { verdict: VirusVerdict::Inconclusive, message: message.into(), malicious: None, suspicious: None }
+        Self {
+            verdict: VirusVerdict::Inconclusive,
+            message: message.into(),
+            malicious: None,
+            suspicious: None,
+        }
     }
 }
 
@@ -123,7 +128,12 @@ pub enum VtStage {
 
 /// Map a completed analysis's stats to a verdict. Extracted so the decision
 /// logic is testable without hitting the network.
-pub fn verdict_from_stats(malicious: u64, suspicious: u64, harmless: u64, undetected: u64) -> VirusCheckResult {
+pub fn verdict_from_stats(
+    malicious: u64,
+    suspicious: u64,
+    harmless: u64,
+    undetected: u64,
+) -> VirusCheckResult {
     let total = malicious + suspicious + harmless + undetected;
     if malicious > 0 || suspicious > 0 {
         VirusCheckResult {
@@ -194,7 +204,11 @@ async fn fetch_upload_url(
 }
 
 fn env_u64(key: &str, default: u64) -> u64 {
-    std::env::var(key).ok().and_then(|v| v.parse().ok()).filter(|&n| n > 0).unwrap_or(default)
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(default)
 }
 
 /// Core VT scan. Respects `max_bytes` before reading the whole file into RAM.
@@ -289,7 +303,11 @@ pub async fn virus_check_file(
                             analysis_id = Some(id);
                             break;
                         }
-                        None => return VirusCheckResult::inconclusive("No analysis id in upload response"),
+                        None => {
+                            return VirusCheckResult::inconclusive(
+                                "No analysis id in upload response",
+                            )
+                        }
                     }
                 }
                 Err(_) => return VirusCheckResult::inconclusive("Invalid JSON in upload response"),
@@ -309,7 +327,10 @@ pub async fn virus_check_file(
 
     let analysis_id = match analysis_id {
         Some(id) => id,
-        None => return last_failure.unwrap_or_else(|| VirusCheckResult::inconclusive("Upload failed with no details")),
+        None => {
+            return last_failure
+                .unwrap_or_else(|| VirusCheckResult::inconclusive("Upload failed with no details"))
+        }
     };
 
     let max_polls = env_u64("VT_MAX_POLLS", 20);
@@ -329,7 +350,9 @@ pub async fn virus_check_file(
 
         let resp = match cancellable(get, cancel).await {
             None => return VirusCheckResult::inconclusive("Cancelled by user"),
-            Some(Err(e)) => return VirusCheckResult::inconclusive(format!("Analysis poll network error: {e}")),
+            Some(Err(e)) => {
+                return VirusCheckResult::inconclusive(format!("Analysis poll network error: {e}"))
+            }
             Some(Ok(r)) => r,
         };
 
@@ -337,7 +360,9 @@ pub async fn virus_check_file(
             let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
             let snippet: String = body.chars().take(500).collect();
-            return VirusCheckResult::inconclusive(format!("Analysis poll HTTP {status}: {snippet}"));
+            return VirusCheckResult::inconclusive(format!(
+                "Analysis poll HTTP {status}: {snippet}"
+            ));
         }
 
         let parsed = match resp.json::<VtAnalysisResponse>().await {
@@ -351,7 +376,11 @@ pub async fn virus_check_file(
                 let s = parsed.data.attributes.stats;
                 return verdict_from_stats(s.malicious, s.suspicious, s.harmless, s.undetected);
             }
-            other => return VirusCheckResult::inconclusive(format!("Unexpected analysis status: {other}")),
+            other => {
+                return VirusCheckResult::inconclusive(format!(
+                    "Unexpected analysis status: {other}"
+                ))
+            }
         }
     }
 
@@ -361,7 +390,10 @@ pub async fn virus_check_file(
 }
 
 /// Await `fut`, or return `None` if the cancellation token fires first.
-async fn cancellable<F: std::future::Future>(fut: F, cancel: Option<&CancellationToken>) -> Option<F::Output> {
+async fn cancellable<F: std::future::Future>(
+    fut: F,
+    cancel: Option<&CancellationToken>,
+) -> Option<F::Output> {
     match cancel {
         Some(token) => tokio::select! {
             out = fut => Some(out),
@@ -395,7 +427,11 @@ pub struct VirusChecker {
 }
 
 impl VirusChecker {
-    pub fn new(api_key: impl Into<String>, max_scan_bytes: Option<u64>, use_separate_vt_process: bool) -> Self {
+    pub fn new(
+        api_key: impl Into<String>,
+        max_scan_bytes: Option<u64>,
+        use_separate_vt_process: bool,
+    ) -> Self {
         Self {
             api_key: api_key.into(),
             max_scan_bytes: max_scan_bytes.unwrap_or(DEFAULT_MAX_BYTES),
@@ -456,7 +492,14 @@ mod tests {
 
     #[tokio::test]
     async fn missing_file_is_inconclusive() {
-        let res = virus_check_file("fake-key", Path::new("/no/such/file/abc"), None, 1000, |_| {}).await;
+        let res = virus_check_file(
+            "fake-key",
+            Path::new("/no/such/file/abc"),
+            None,
+            1000,
+            |_| {},
+        )
+        .await;
         assert_eq!(res.verdict, VirusVerdict::Inconclusive);
         assert!(res.message.contains("Failed to stat file"));
     }

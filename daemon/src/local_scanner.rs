@@ -57,7 +57,9 @@ pub struct LocalScanner {
 
 impl LocalScanner {
     pub fn new(socket_path: impl Into<String>) -> Self {
-        Self { socket_path: socket_path.into() }
+        Self {
+            socket_path: socket_path.into(),
+        }
     }
 
     /// Liveness check: the socket must exist AND clamd must answer PING with
@@ -65,15 +67,15 @@ impl LocalScanner {
     /// fail the handshake, which would otherwise let a dead scanner silently
     /// bypass scanning.
     pub async fn probe(socket_path: &Path, timeout_ms: u64) -> Result<()> {
-        tokio::fs::metadata(socket_path).await.with_context(|| {
-            format!("clamd socket unreachable at {}", socket_path.display())
-        })?;
+        tokio::fs::metadata(socket_path)
+            .await
+            .with_context(|| format!("clamd socket unreachable at {}", socket_path.display()))?;
 
         let dur = Duration::from_millis(timeout_ms);
         let handshake = async {
-            let mut sock = UnixStream::connect(socket_path).await.with_context(|| {
-                format!("clamd PING failed at {}", socket_path.display())
-            })?;
+            let mut sock = UnixStream::connect(socket_path)
+                .await
+                .with_context(|| format!("clamd PING failed at {}", socket_path.display()))?;
             sock.write_all(b"nPING\n").await?;
             let mut response = String::new();
             let mut buf = [0u8; 256];
@@ -156,7 +158,9 @@ impl LocalScanner {
                 break;
             }
         }
-        Ok(String::from_utf8_lossy(&reply).trim_end_matches('\0').to_string())
+        Ok(String::from_utf8_lossy(&reply)
+            .trim_end_matches('\0')
+            .to_string())
     }
 }
 
@@ -168,8 +172,14 @@ mod tests {
     #[test]
     fn classify_maps_clamd_replies() {
         assert_eq!(classify("stream: OK"), LocalVerdict::Clean);
-        assert_eq!(classify("stream: Eicar-Test-Signature FOUND"), LocalVerdict::Malicious);
-        assert_eq!(classify("stream: INSTREAM size limit exceeded ERROR"), LocalVerdict::Error);
+        assert_eq!(
+            classify("stream: Eicar-Test-Signature FOUND"),
+            LocalVerdict::Malicious
+        );
+        assert_eq!(
+            classify("stream: INSTREAM size limit exceeded ERROR"),
+            LocalVerdict::Error
+        );
         assert_eq!(classify("garbage"), LocalVerdict::Error);
     }
 
@@ -200,7 +210,10 @@ mod tests {
 
         let err = LocalScanner::probe(&sock_path, 300).await.unwrap_err();
         let msg = err.to_string().to_lowercase();
-        assert!(msg.contains("timed out") || msg.contains("did not answer"), "got {msg}");
+        assert!(
+            msg.contains("timed out") || msg.contains("did not answer"),
+            "got {msg}"
+        );
     }
 
     #[tokio::test]

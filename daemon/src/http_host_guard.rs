@@ -41,7 +41,13 @@ mod tests {
 
     #[test]
     fn loopback_hosts_are_safe() {
-        for h in ["127.0.0.1", "::1", "localhost", "::ffff:127.0.0.1", " LocalHost "] {
+        for h in [
+            "127.0.0.1",
+            "::1",
+            "localhost",
+            "::ffff:127.0.0.1",
+            " LocalHost ",
+        ] {
             assert!(!is_non_loopback_binding(h), "{h} should be loopback");
         }
     }

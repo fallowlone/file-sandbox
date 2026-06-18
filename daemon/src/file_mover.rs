@@ -20,7 +20,9 @@ pub struct FileMover {
 
 impl FileMover {
     pub fn new(destination: impl Into<PathBuf>) -> Self {
-        Self { destination: destination.into() }
+        Self {
+            destination: destination.into(),
+        }
     }
 
     /// Copy `source` into quarantine under a unique `{uuid}_{basename}` name,
@@ -48,7 +50,10 @@ impl FileMover {
             )
         })?;
 
-        Ok(QuarantineMoveResult { quarantine_file_path, original_base_name })
+        Ok(QuarantineMoveResult {
+            quarantine_file_path,
+            original_base_name,
+        })
     }
 
     /// Copy a quarantined file back to the watch folder under its original
@@ -60,8 +65,9 @@ impl FileMover {
         quarantine_file_path: &Path,
         original_base_name: &str,
     ) -> Result<PathBuf> {
-        let restored_path =
-            self.resolve_restore_destination(watch_path, original_base_name).await;
+        let restored_path = self
+            .resolve_restore_destination(watch_path, original_base_name)
+            .await;
 
         tokio::fs::copy(quarantine_file_path, &restored_path)
             .await
@@ -119,9 +125,11 @@ impl FileMover {
     }
 
     pub async fn ensure_directory(&self) -> Result<()> {
-        tokio::fs::create_dir_all(&self.destination).await.with_context(|| {
-            format!("Failed to create directory {}", self.destination.display())
-        })?;
+        tokio::fs::create_dir_all(&self.destination)
+            .await
+            .with_context(|| {
+                format!("Failed to create directory {}", self.destination.display())
+            })?;
         Ok(())
     }
 }
@@ -174,8 +182,16 @@ mod tests {
 
         assert_eq!(res.original_base_name, "evil.bin");
         assert!(res.quarantine_file_path.starts_with(&quarantine));
-        assert!(res.quarantine_file_path.file_name().unwrap().to_string_lossy().ends_with("_evil.bin"));
-        assert_eq!(tokio::fs::read(&res.quarantine_file_path).await.unwrap(), b"payload");
+        assert!(res
+            .quarantine_file_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .ends_with("_evil.bin"));
+        assert_eq!(
+            tokio::fs::read(&res.quarantine_file_path).await.unwrap(),
+            b"payload"
+        );
         assert!(!exists(&source).await, "source must be removed");
     }
 
@@ -188,11 +204,17 @@ mod tests {
         write_file(&quarantined, b"data").await;
 
         let mover = FileMover::new(dir.path().join("quarantine"));
-        let restored = mover.restore_to_watch(&watch, &quarantined, "file.txt").await.unwrap();
+        let restored = mover
+            .restore_to_watch(&watch, &quarantined, "file.txt")
+            .await
+            .unwrap();
 
         assert_eq!(restored, watch.join("file.txt"));
         assert_eq!(tokio::fs::read(&restored).await.unwrap(), b"data");
-        assert!(!exists(&quarantined).await, "quarantine copy must be removed");
+        assert!(
+            !exists(&quarantined).await,
+            "quarantine copy must be removed"
+        );
     }
 
     #[tokio::test]
@@ -207,7 +229,10 @@ mod tests {
         write_file(&quarantined, b"restored").await;
 
         let mover = FileMover::new(dir.path().join("quarantine"));
-        let restored = mover.restore_to_watch(&watch, &quarantined, "doc.pdf").await.unwrap();
+        let restored = mover
+            .restore_to_watch(&watch, &quarantined, "doc.pdf")
+            .await
+            .unwrap();
 
         assert_ne!(restored, watch.join("doc.pdf"));
         let name = restored.file_name().unwrap().to_string_lossy();
@@ -231,13 +256,19 @@ mod tests {
         let dir = tempdir().unwrap();
         let mover = FileMover::new(dir.path().join("quarantine"));
         // Deleting a file that was already removed must succeed, not error.
-        mover.delete_file(&dir.path().join("ghost.bin")).await.unwrap();
+        mover
+            .delete_file(&dir.path().join("ghost.bin"))
+            .await
+            .unwrap();
     }
 
     #[test]
     fn split_name_ext_matches_node_path_parse() {
         assert_eq!(split_name_ext("a.bin"), ("a".into(), ".bin".into()));
-        assert_eq!(split_name_ext("archive.tar.gz"), ("archive.tar".into(), ".gz".into()));
+        assert_eq!(
+            split_name_ext("archive.tar.gz"),
+            ("archive.tar".into(), ".gz".into())
+        );
         assert_eq!(split_name_ext("noext"), ("noext".into(), "".into()));
         assert_eq!(split_name_ext(".bashrc"), (".bashrc".into(), "".into()));
     }

@@ -202,9 +202,7 @@ impl JobStore {
     }
 
     pub fn list_recent(&self, limit: i64) -> Result<Vec<JobRow>> {
-        let sql = format!(
-            "SELECT {SELECT_COLUMNS} FROM jobs ORDER BY created_at DESC LIMIT ?"
-        );
+        let sql = format!("SELECT {SELECT_COLUMNS} FROM jobs ORDER BY created_at DESC LIMIT ?");
         let db = self.db.lock().expect("job store mutex poisoned");
         let mut stmt = db.prepare(&sql)?;
         let rows = stmt
@@ -265,7 +263,11 @@ impl JobStore {
     /// Delete settled rows. Active rows (`received`, `in_quarantine`, `scanning`)
     /// are kept so in-flight pipeline stages retain their row reference.
     pub fn clear_all(&self) -> Result<ClearResult> {
-        let skipped: i64 = self.db.lock().expect("job store mutex poisoned").query_row(
+        let skipped: i64 = self
+            .db
+            .lock()
+            .expect("job store mutex poisoned")
+            .query_row(
             "SELECT COUNT(*) FROM jobs WHERE status IN ('received', 'in_quarantine', 'scanning')",
             [],
             |row| row.get(0),
@@ -323,9 +325,14 @@ mod tests {
     fn pompelmi_verdict_starts_null_and_persists() {
         let store = fresh_store();
         store.insert_received("job-1", "/a.bin", "a.bin").unwrap();
-        assert_eq!(store.get_job("job-1").unwrap().unwrap().pompelmi_verdict, None);
+        assert_eq!(
+            store.get_job("job-1").unwrap().unwrap().pompelmi_verdict,
+            None
+        );
 
-        store.set_pompelmi_verdict("job-1", "clean", Some("ok")).unwrap();
+        store
+            .set_pompelmi_verdict("job-1", "clean", Some("ok"))
+            .unwrap();
         let after = store.get_job("job-1").unwrap().unwrap();
         assert_eq!(after.pompelmi_verdict.as_deref(), Some("clean"));
         assert_eq!(after.detail.as_deref(), Some("ok"));
@@ -334,18 +341,33 @@ mod tests {
     #[test]
     fn scan_stage_starts_null_and_persists() {
         let store = fresh_store();
-        store.insert_received("job-stage-1", "/a.bin", "a.bin").unwrap();
-        assert_eq!(store.get_job("job-stage-1").unwrap().unwrap().scan_stage, None);
+        store
+            .insert_received("job-stage-1", "/a.bin", "a.bin")
+            .unwrap();
+        assert_eq!(
+            store.get_job("job-stage-1").unwrap().unwrap().scan_stage,
+            None
+        );
 
         store.set_stage("job-stage-1", "cache_check").unwrap();
         assert_eq!(
-            store.get_job("job-stage-1").unwrap().unwrap().scan_stage.as_deref(),
+            store
+                .get_job("job-stage-1")
+                .unwrap()
+                .unwrap()
+                .scan_stage
+                .as_deref(),
             Some("cache_check")
         );
 
         store.set_stage("job-stage-1", "done").unwrap();
         assert_eq!(
-            store.get_job("job-stage-1").unwrap().unwrap().scan_stage.as_deref(),
+            store
+                .get_job("job-stage-1")
+                .unwrap()
+                .unwrap()
+                .scan_stage
+                .as_deref(),
             Some("done")
         );
     }
@@ -353,7 +375,9 @@ mod tests {
     #[test]
     fn insert_received_sets_received_status_and_timestamps() {
         let store = fresh_store();
-        store.insert_received("j", "/src/file.bin", "file.bin").unwrap();
+        store
+            .insert_received("j", "/src/file.bin", "file.bin")
+            .unwrap();
         let row = store.get_job("j").unwrap().unwrap();
         assert_eq!(row.status, "received");
         assert_eq!(row.source_path, "/src/file.bin");
@@ -371,7 +395,13 @@ mod tests {
         store.insert_received("clean-job", "/c", "c").unwrap();
         store.set_scanning("clean-job").unwrap();
         store
-            .set_scan_result("clean-job", &ScanResult { verdict: "clean".into(), message: "ok".into() })
+            .set_scan_result(
+                "clean-job",
+                &ScanResult {
+                    verdict: "clean".into(),
+                    message: "ok".into(),
+                },
+            )
             .unwrap();
         let clean = store.get_job("clean-job").unwrap().unwrap();
         assert_eq!(clean.vt_verdict.as_deref(), Some("clean"));
@@ -379,7 +409,13 @@ mod tests {
 
         store.insert_received("bad-job", "/b", "b").unwrap();
         store
-            .set_scan_result("bad-job", &ScanResult { verdict: "malicious".into(), message: "EICAR".into() })
+            .set_scan_result(
+                "bad-job",
+                &ScanResult {
+                    verdict: "malicious".into(),
+                    message: "EICAR".into(),
+                },
+            )
             .unwrap();
         let bad = store.get_job("bad-job").unwrap().unwrap();
         assert_eq!(bad.vt_verdict.as_deref(), Some("malicious"));
@@ -396,7 +432,13 @@ mod tests {
         assert!(err.downcast_ref::<JobConflictError>().is_some());
 
         store
-            .set_scan_result("j", &ScanResult { verdict: "malicious".into(), message: "x".into() })
+            .set_scan_result(
+                "j",
+                &ScanResult {
+                    verdict: "malicious".into(),
+                    message: "x".into(),
+                },
+            )
             .unwrap();
         store.set_deleted("j", "Deleted by user").unwrap();
         assert_eq!(store.get_job("j").unwrap().unwrap().status, "deleted");
@@ -432,10 +474,16 @@ mod tests {
         store.insert_received("active-1", "/a", "a").unwrap();
         store.set_scanning("active-1").unwrap();
         store.insert_received("active-2", "/a", "a").unwrap(); // status 'received'
-        // settled
+                                                               // settled
         store.insert_received("done-1", "/d", "d").unwrap();
         store
-            .set_scan_result("done-1", &ScanResult { verdict: "malicious".into(), message: "x".into() })
+            .set_scan_result(
+                "done-1",
+                &ScanResult {
+                    verdict: "malicious".into(),
+                    message: "x".into(),
+                },
+            )
             .unwrap(); // quarantine_kept
 
         let res = store.clear_all().unwrap();
@@ -451,7 +499,13 @@ mod tests {
         let store = fresh_store();
         store.insert_received("old", "/o", "o").unwrap();
         store
-            .set_scan_result("old", &ScanResult { verdict: "inconclusive".into(), message: "?".into() })
+            .set_scan_result(
+                "old",
+                &ScanResult {
+                    verdict: "inconclusive".into(),
+                    message: "?".into(),
+                },
+            )
             .unwrap();
         store
             .db
@@ -462,7 +516,13 @@ mod tests {
 
         store.insert_received("new", "/n", "n").unwrap();
         store
-            .set_scan_result("new", &ScanResult { verdict: "inconclusive".into(), message: "?".into() })
+            .set_scan_result(
+                "new",
+                &ScanResult {
+                    verdict: "inconclusive".into(),
+                    message: "?".into(),
+                },
+            )
             .unwrap();
         store
             .db

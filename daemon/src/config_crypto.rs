@@ -105,8 +105,7 @@ pub fn is_encrypted_config_payload(s: &str) -> bool {
 mod tests {
     use super::*;
 
-    const ZERO_KEY: &str =
-        "0000000000000000000000000000000000000000000000000000000000000000";
+    const ZERO_KEY: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
     #[test]
     fn round_trip() {
