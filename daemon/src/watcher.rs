@@ -34,11 +34,15 @@ const BROWSER_TEMP_EXTENSIONS: [&str; 5] =
 const QUARANTINE_XATTR_VALUE: &str = "0083;00000000;FileSandbox;";
 
 fn is_browser_temp(name: &str) -> bool {
-    BROWSER_TEMP_EXTENSIONS.iter().any(|ext| name.ends_with(ext))
+    BROWSER_TEMP_EXTENSIONS
+        .iter()
+        .any(|ext| name.ends_with(ext))
 }
 
 fn base_name(path: &Path) -> String {
-    path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 fn parse_verdict(s: &str) -> VirusVerdict {
@@ -71,13 +75,20 @@ async fn set_quarantine_xattr(path: &Path) {
         .await;
     if let Ok(s) = status {
         if !s.success() {
-            eprintln!("[xattr] Failed to set quarantine xattr on {}", path.display());
+            eprintln!(
+                "[xattr] Failed to set quarantine xattr on {}",
+                path.display()
+            );
         }
     }
 }
 
 async fn clear_all_xattrs(path: &Path) {
-    let _ = tokio::process::Command::new("xattr").arg("-c").arg(path).status().await;
+    let _ = tokio::process::Command::new("xattr")
+        .arg("-c")
+        .arg(path)
+        .status()
+        .await;
 }
 
 pub struct WatcherOptions {
@@ -262,7 +273,10 @@ impl Watcher {
             }
         });
 
-        Ok(WatcherHandles { _watcher: watcher, _task: task })
+        Ok(WatcherHandles {
+            _watcher: watcher,
+            _task: task,
+        })
     }
 
     /// React to a raw notify event: immediately lock newly-created files and
@@ -352,7 +366,7 @@ impl Watcher {
         if is_browser_temp(&fname) {
             return;
         }
-        if inner.ignored.iter().any(|ign| fname == *ign) {
+        if inner.ignored.contains(&fname) {
             return;
         }
         match tokio::fs::metadata(&filepath).await {
@@ -365,7 +379,12 @@ impl Watcher {
             return;
         }
         // Dedupe concurrent add/change for the same path.
-        if !inner.processing_paths.lock().unwrap().insert(filepath.clone()) {
+        if !inner
+            .processing_paths
+            .lock()
+            .unwrap()
+            .insert(filepath.clone())
+        {
             return;
         }
 
@@ -380,7 +399,10 @@ impl Watcher {
 
         let job_id = Uuid::new_v4().to_string();
         let original_name = base_name(filepath);
-        let _ = inner.job_store.insert_received(&job_id, &filepath.to_string_lossy(), &original_name);
+        let _ =
+            inner
+                .job_store
+                .insert_received(&job_id, &filepath.to_string_lossy(), &original_name);
         let _ = inner.job_store.set_stage(&job_id, "received");
 
         if let Err(e) = self.pipeline_inner(&job_id, filepath).await {
@@ -407,20 +429,26 @@ impl Watcher {
         // scan_paused → keep quarantined without scanning.
         if *inner.mode.lock().unwrap() == WatcherMode::ScanPaused {
             js.set_stage(job_id, "done")?;
-            js.set_scan_result(job_id, &ScanResult {
-                verdict: "inconclusive".into(),
-                message: "Scanning paused at intake".into(),
-            })?;
+            js.set_scan_result(
+                job_id,
+                &ScanResult {
+                    verdict: "inconclusive".into(),
+                    message: "Scanning paused at intake".into(),
+                },
+            )?;
             return Ok(());
         }
 
         let no_scanners = inner.local_scanner.is_none() && !inner.vt_enabled;
         if no_scanners {
             js.set_stage(job_id, "done")?;
-            js.set_scan_result(job_id, &ScanResult {
-                verdict: "inconclusive".into(),
-                message: "No active scanners - kept in quarantine".into(),
-            })?;
+            js.set_scan_result(
+                job_id,
+                &ScanResult {
+                    verdict: "inconclusive".into(),
+                    message: "No active scanners - kept in quarantine".into(),
+                },
+            )?;
             return Ok(());
         }
 
@@ -430,7 +458,11 @@ impl Watcher {
         if let Some(scanner) = &inner.local_scanner {
             js.set_stage(job_id, "local_scan")?;
             let token = CancellationToken::new();
-            inner.scan_controllers.lock().unwrap().insert(job_id.to_string(), token.clone());
+            inner
+                .scan_controllers
+                .lock()
+                .unwrap()
+                .insert(job_id.to_string(), token.clone());
             let local = tokio::select! {
                 r = scanner.check(&quarantine) => r,
                 _ = token.cancelled() => crate::local_scanner::LocalScanResult {
@@ -444,19 +476,25 @@ impl Watcher {
             match local.verdict {
                 LocalVerdict::Malicious => {
                     js.set_stage(job_id, "done")?;
-                    js.set_scan_result(job_id, &ScanResult {
-                        verdict: "infected".into(),
-                        message: format!("Local scanner: {}", local.message),
-                    })?;
+                    js.set_scan_result(
+                        job_id,
+                        &ScanResult {
+                            verdict: "infected".into(),
+                            message: format!("Local scanner: {}", local.message),
+                        },
+                    )?;
                     return Ok(());
                 }
                 LocalVerdict::Error => {
                     if inner.pompelmi_failure_mode == FailureMode::Inconclusive {
                         js.set_stage(job_id, "done")?;
-                        js.set_scan_result(job_id, &ScanResult {
-                            verdict: "inconclusive".into(),
-                            message: format!("Local scanner failed: {}", local.message),
-                        })?;
+                        js.set_scan_result(
+                            job_id,
+                            &ScanResult {
+                                verdict: "inconclusive".into(),
+                                message: format!("Local scanner failed: {}", local.message),
+                            },
+                        )?;
                         return Ok(());
                     }
                     // bypass → fall through to VT
@@ -467,10 +505,13 @@ impl Watcher {
 
         if !inner.vt_enabled {
             js.set_stage(job_id, "done")?;
-            js.set_scan_result(job_id, &ScanResult {
-                verdict: "inconclusive".into(),
-                message: "VT disabled - no cloud scan ran".into(),
-            })?;
+            js.set_scan_result(
+                job_id,
+                &ScanResult {
+                    verdict: "inconclusive".into(),
+                    message: "VT disabled - no cloud scan ran".into(),
+                },
+            )?;
             return Ok(());
         }
 
@@ -493,10 +534,13 @@ impl Watcher {
         if let Some(cached) = crate::vt_cache::check(&quarantine) {
             let verdict = parse_verdict(&cached);
             js.set_stage(job_id, "done")?;
-            js.set_scan_result(job_id, &ScanResult {
-                verdict: verdict.as_str().into(),
-                message: "From local cache (SHA-256 match)".into(),
-            })?;
+            js.set_scan_result(
+                job_id,
+                &ScanResult {
+                    verdict: verdict.as_str().into(),
+                    message: "From local cache (SHA-256 match)".into(),
+                },
+            )?;
             if verdict == VirusVerdict::Clean {
                 self.restore_clean(job_id, &quarantine, &original).await?;
             }
@@ -505,9 +549,18 @@ impl Watcher {
 
         // VirusTotal scan, bounded by the semaphore.
         let token = CancellationToken::new();
-        inner.scan_controllers.lock().unwrap().insert(job_id.to_string(), token.clone());
+        inner
+            .scan_controllers
+            .lock()
+            .unwrap()
+            .insert(job_id.to_string(), token.clone());
 
-        let permit = inner.scan_semaphore.clone().acquire_owned().await.expect("semaphore closed");
+        let permit = inner
+            .scan_semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("semaphore closed");
         inner.metrics.inc_scan();
         let result = {
             let on_stage = |stage: VtStage| {
@@ -517,13 +570,17 @@ impl Watcher {
                 };
                 let _ = js.set_stage(job_id, s);
             };
-            inner.virus_checker.check(&quarantine, Some(&token), on_stage).await
+            inner
+                .virus_checker
+                .check(&quarantine, Some(&token), on_stage)
+                .await
         };
         inner.metrics.dec_scan();
         drop(permit);
         inner.scan_controllers.lock().unwrap().remove(job_id);
 
-        if result.verdict != VirusVerdict::Inconclusive && result.verdict != VirusVerdict::Oversized {
+        if result.verdict != VirusVerdict::Inconclusive && result.verdict != VirusVerdict::Oversized
+        {
             crate::vt_cache::store(&quarantine, result.verdict.as_str());
         }
 
@@ -534,10 +591,13 @@ impl Watcher {
         }
 
         js.set_stage(job_id, "done")?;
-        js.set_scan_result(job_id, &ScanResult {
-            verdict: result.verdict.as_str().into(),
-            message: result.message.clone(),
-        })?;
+        js.set_scan_result(
+            job_id,
+            &ScanResult {
+                verdict: result.verdict.as_str().into(),
+                message: result.message.clone(),
+            },
+        )?;
 
         if result.verdict == VirusVerdict::Clean {
             self.restore_clean(job_id, &quarantine, &original).await?;
@@ -547,12 +607,20 @@ impl Watcher {
 
     async fn restore_clean(&self, job_id: &str, quarantine: &Path, original: &str) -> Result<()> {
         let inner = &self.0;
-        let dest = inner.mover.resolve_restore_destination(&inner.watch_path, original).await;
+        let dest = inner
+            .mover
+            .resolve_restore_destination(&inner.watch_path, original)
+            .await;
         inner.restoring_paths.lock().unwrap().insert(dest);
-        let restored = inner.mover.restore_to_watch(&inner.watch_path, quarantine, original).await?;
+        let restored = inner
+            .mover
+            .restore_to_watch(&inner.watch_path, quarantine, original)
+            .await?;
         chmod(&restored, 0o644).await;
         clear_all_xattrs(&restored).await;
-        inner.job_store.set_restored(job_id, &restored.to_string_lossy())?;
+        inner
+            .job_store
+            .set_restored(job_id, &restored.to_string_lossy())?;
         Ok(())
     }
 }
@@ -570,7 +638,10 @@ mod tests {
             "test-key",
             store,
             Metrics::new(),
-            WatcherOptions { initial_mode, ..Default::default() },
+            WatcherOptions {
+                initial_mode,
+                ..Default::default()
+            },
         )
     }
 
@@ -579,8 +650,14 @@ mod tests {
         let w = make_watcher(WatcherMode::Active);
         let c1 = CancellationToken::new();
         let c2 = CancellationToken::new();
-        w.0.scan_controllers.lock().unwrap().insert("a".into(), c1.clone());
-        w.0.scan_controllers.lock().unwrap().insert("b".into(), c2.clone());
+        w.0.scan_controllers
+            .lock()
+            .unwrap()
+            .insert("a".into(), c1.clone());
+        w.0.scan_controllers
+            .lock()
+            .unwrap()
+            .insert("b".into(), c2.clone());
 
         w.set_mode(WatcherMode::ScanPaused);
 
@@ -592,7 +669,10 @@ mod tests {
     fn set_mode_same_state_is_noop() {
         let w = make_watcher(WatcherMode::ScanPaused);
         let c = CancellationToken::new();
-        w.0.scan_controllers.lock().unwrap().insert("a".into(), c.clone());
+        w.0.scan_controllers
+            .lock()
+            .unwrap()
+            .insert("a".into(), c.clone());
         w.set_mode(WatcherMode::ScanPaused);
         assert!(!c.is_cancelled());
     }
@@ -608,7 +688,10 @@ mod tests {
     fn cancel_aborts_and_removes_controller() {
         let w = make_watcher(WatcherMode::Active);
         let c = CancellationToken::new();
-        w.0.scan_controllers.lock().unwrap().insert("job".into(), c.clone());
+        w.0.scan_controllers
+            .lock()
+            .unwrap()
+            .insert("job".into(), c.clone());
         w.cancel("job");
         assert!(c.is_cancelled());
         assert!(w.0.scan_controllers.lock().unwrap().is_empty());

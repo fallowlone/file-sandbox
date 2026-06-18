@@ -34,7 +34,9 @@ where
     F: FnMut(String) -> Fut,
     Fut: Future<Output = Result<()>>,
 {
-    let rows = job_store.list_inconclusive_older_than(cutoff_ms).unwrap_or_default();
+    let rows = job_store
+        .list_inconclusive_older_than(cutoff_ms)
+        .unwrap_or_default();
     let mut deleted = 0;
     for row in rows {
         let id = row.id.clone();
@@ -68,7 +70,7 @@ where
             interval.tick().await;
             let cutoff = now_ms() - max_age_ms;
             let del = delete_quarantined.clone();
-            sweep_once(&job_store, cutoff, move |id| del(id)).await;
+            sweep_once(&job_store, cutoff, del).await;
         }
     });
     Some(handle)
@@ -87,12 +89,24 @@ mod tests {
         // Inconclusive → quarantine_kept + vt_verdict='inconclusive' → swept.
         store.insert_received("stale", "/s", "s").unwrap();
         store
-            .set_scan_result("stale", &ScanResult { verdict: "inconclusive".into(), message: "?".into() })
+            .set_scan_result(
+                "stale",
+                &ScanResult {
+                    verdict: "inconclusive".into(),
+                    message: "?".into(),
+                },
+            )
             .unwrap();
         // Malicious → quarantine_kept but vt_verdict='malicious' → filtered out.
         store.insert_received("bad", "/b", "b").unwrap();
         store
-            .set_scan_result("bad", &ScanResult { verdict: "malicious".into(), message: "x".into() })
+            .set_scan_result(
+                "bad",
+                &ScanResult {
+                    verdict: "malicious".into(),
+                    message: "x".into(),
+                },
+            )
             .unwrap();
 
         // Future cutoff: every row's created_at precedes it, so only the
@@ -114,7 +128,13 @@ mod tests {
         let store = JobStore::new(":memory:").unwrap();
         store.insert_received("stale", "/s", "s").unwrap();
         store
-            .set_scan_result("stale", &ScanResult { verdict: "inconclusive".into(), message: "?".into() })
+            .set_scan_result(
+                "stale",
+                &ScanResult {
+                    verdict: "inconclusive".into(),
+                    message: "?".into(),
+                },
+            )
             .unwrap();
 
         let cutoff = now_ms() + 10_000;

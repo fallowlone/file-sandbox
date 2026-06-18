@@ -15,6 +15,7 @@ pub mod launch_agent_monitor;
 pub mod local_scanner;
 pub mod metrics;
 pub mod mode;
+pub mod secret_store;
 pub mod ui_server;
 pub mod virus_checker;
 pub mod vt_cache;

@@ -25,6 +25,7 @@ use crate::launch_agent_monitor::LaunchAgentEvent;
 use crate::local_scanner::LocalScanner;
 use crate::metrics::Metrics;
 use crate::mode::{parse_mode, WatcherMode};
+use crate::secret_store::{SecretStore, ACCOUNT_API_TOKEN, ACCOUNT_VT_API_KEY};
 use crate::watcher::Watcher;
 
 const MASK_TAIL: usize = 4;
@@ -46,13 +47,19 @@ pub struct AppState {
     pub watcher: Watcher,
     pub file_mover: FileMover,
     pub security_events: Arc<Mutex<Vec<LaunchAgentEvent>>>,
+    /// Secret backend for write routing. `Some` when secrets live outside
+    /// `config.json` (Keychain); `None` keeps secret writes in the file.
+    pub secret_store: Option<Arc<dyn SecretStore>>,
 }
 
 impl AppState {
     /// Port of `index.ts deleteQuarantineJob`. Shared by the HTTP delete route
     /// and the inconclusive sweeper.
     pub async fn delete_quarantine_job(&self, id: &str, detail: &str) -> Result<()> {
-        let job = self.store.get_job(id)?.ok_or_else(|| anyhow!("Job {id} not found"))?;
+        let job = self
+            .store
+            .get_job(id)?
+            .ok_or_else(|| anyhow!("Job {id} not found"))?;
         if job.status != "quarantine_kept" {
             bail!("Job {id} is not in quarantine_kept status");
         }
@@ -66,7 +73,10 @@ impl AppState {
 
     /// Port of `index.ts restoreQuarantineJob`.
     async fn restore_quarantine_job(&self, id: &str) -> Result<()> {
-        let job = self.store.get_job(id)?.ok_or_else(|| anyhow!("Job {id} not found"))?;
+        let job = self
+            .store
+            .get_job(id)?
+            .ok_or_else(|| anyhow!("Job {id} not found"))?;
         if job.status != "quarantine_kept" {
             bail!("Job {id} is not in quarantine_kept status");
         }
@@ -114,7 +124,9 @@ fn resolve_path(raw: &str) -> PathBuf {
     let base = if FsPath::new(raw).is_absolute() {
         PathBuf::from(raw)
     } else {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")).join(raw)
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("/"))
+            .join(raw)
     };
     let mut out: Vec<std::ffi::OsString> = Vec::new();
     for comp in base.components() {
@@ -173,6 +185,7 @@ async fn health(State(st): State<Arc<AppState>>) -> impl IntoResponse {
         "lastError": st.metrics.last_error(),
         "apiAuthEnabled": !st.config.api_token.trim().is_empty(),
         "configEncryptedAtRest": st.config.config_encrypted_at_rest,
+        "secretsBackend": st.config.secrets_backend.as_str(),
         "mode": st.watcher.get_mode().as_str(),
         "scannersEnabled": { "pompelmi": st.config.pompelmi_enabled, "vt": st.config.vt_enabled },
         "localScanner": local_scanner,
@@ -230,9 +243,8 @@ async fn set_mode(State(st): State<Arc<AppState>>, Json(body): Json<Value>) -> R
 
 async fn delete_all_jobs(State(st): State<Arc<AppState>>) -> Response {
     match st.store.clear_all() {
-        Ok(res) => {
-            Json(json!({ "ok": true, "deleted": res.deleted, "skipped": res.skipped })).into_response()
-        }
+        Ok(res) => Json(json!({ "ok": true, "deleted": res.deleted, "skipped": res.skipped }))
+            .into_response(),
         Err(e) => server_error(e.to_string()),
     }
 }
@@ -245,13 +257,23 @@ async fn cancel(State(st): State<Arc<AppState>>, Path(id): Path<String>) -> Resp
 async fn restore(State(st): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
     match st.restore_quarantine_job(&id).await {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
 async fn get_config(State(st): State<Arc<AppState>>) -> Response {
     let c = &st.config;
-    let mask = |v: &str| if v.is_empty() { String::new() } else { mask_secret(v, MASK_TAIL) };
+    let mask = |v: &str| {
+        if v.is_empty() {
+            String::new()
+        } else {
+            mask_secret(v, MASK_TAIL)
+        }
+    };
     Json(json!({
         "vtApiKey": mask(&c.vt_api_key),
         "apiToken": mask(&c.api_token),
@@ -266,8 +288,30 @@ async fn get_config(State(st): State<Arc<AppState>>) -> Response {
         "useSeparateVtProcess": c.use_separate_vt_process,
         "inconclusiveRetentionDays": c.inconclusive_retention_days,
         "configEncryptedAtRest": c.config_encrypted_at_rest,
+        "secretsBackend": c.secrets_backend.as_str(),
     }))
     .into_response()
+}
+
+/// Route secret updates to `store` instead of `config.json`. Consumes the
+/// secret fields from `updates` (`take`) so the subsequent file write never
+/// persists them. An empty value clears the secret from the store.
+fn route_secrets_to_store(store: &dyn SecretStore, updates: &mut RawConfig) -> Result<()> {
+    if let Some(v) = updates.vt_api_key.take() {
+        if v.is_empty() {
+            store.delete(ACCOUNT_VT_API_KEY)?;
+        } else {
+            store.set(ACCOUNT_VT_API_KEY, &v)?;
+        }
+    }
+    if let Some(v) = updates.api_token.take() {
+        if v.is_empty() {
+            store.delete(ACCOUNT_API_TOKEN)?;
+        } else {
+            store.set(ACCOUNT_API_TOKEN, &v)?;
+        }
+    }
+    Ok(())
 }
 
 async fn post_config(State(st): State<Arc<AppState>>, Json(body): Json<Value>) -> Response {
@@ -300,7 +344,10 @@ async fn post_config(State(st): State<Arc<AppState>>, Json(body): Json<Value>) -
     }
 
     // Path fields: validate (resolve + reject system dirs) before writing.
-    for (key, raw) in [("watchPath", s("watchPath")), ("quarantinePath", s("quarantinePath"))] {
+    for (key, raw) in [
+        ("watchPath", s("watchPath")),
+        ("quarantinePath", s("quarantinePath")),
+    ] {
         if let Some(p) = raw.filter(|p| !p.is_empty()) {
             let resolved = resolve_path(p);
             let rs = resolved.to_string_lossy().into_owned();
@@ -354,6 +401,21 @@ async fn post_config(State(st): State<Arc<AppState>>, Json(body): Json<Value>) -
     if let Some(n) = as_int("inconclusiveRetentionDays").filter(|&n| n >= 0) {
         updates.inconclusive_retention_days = Some(n as u32);
     }
+    if let Some(v) = s("secretsBackend").filter(|v| !v.is_empty()) {
+        let v = v.to_lowercase();
+        if v != "file" && v != "keychain" {
+            return bad_request("secretsBackend must be 'file' or 'keychain'".into());
+        }
+        updates.secrets_backend = Some(v);
+    }
+
+    // When a secret store is active, secrets are written to it and stripped from
+    // `updates` so they never land in config.json as plaintext.
+    if let Some(store) = st.secret_store.as_deref() {
+        if let Err(e) = route_secrets_to_store(store, &mut updates) {
+            return server_error(e.to_string());
+        }
+    }
 
     match config::write_config(updates) {
         Ok(()) => Json(json!({ "ok": true, "restartRequired": true })).into_response(),
@@ -366,7 +428,11 @@ async fn delete_quarantine(State(st): State<Arc<AppState>>, Path(id): Path<Strin
         Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(e) => {
             let is_conflict = e.downcast_ref::<JobConflictError>().is_some();
-            let status = if is_conflict { StatusCode::CONFLICT } else { StatusCode::BAD_REQUEST };
+            let status = if is_conflict {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::BAD_REQUEST
+            };
             (status, Json(json!({ "error": e.to_string() }))).into_response()
         }
     }
@@ -377,7 +443,11 @@ async fn root() -> Html<&'static str> {
 }
 
 fn server_error(msg: String) -> Response {
-    (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": msg }))).into_response()
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": msg })),
+    )
+        .into_response()
 }
 
 fn bad_request(msg: String) -> Response {
@@ -401,17 +471,26 @@ async fn auth(State(st): State<Arc<AppState>>, req: Request, next: Next) -> Resp
         .and_then(|v| v.to_str().ok())
         .filter(|v| v.to_lowercase().starts_with("bearer "))
         .map(|v| v[7..].trim());
-    let header_tok = headers.get("x-filesandbox-token").and_then(|v| v.to_str().ok());
+    let header_tok = headers
+        .get("x-filesandbox-token")
+        .and_then(|v| v.to_str().ok());
     if bearer == Some(token) || header_tok == Some(token) {
         return next.run(req).await;
     }
-    (StatusCode::UNAUTHORIZED, Json(json!({ "error": "Unauthorized" }))).into_response()
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({ "error": "Unauthorized" })),
+    )
+        .into_response()
 }
 
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/health", get(health))
-        .route("/health", get(|| async { Redirect::permanent("/api/health") }))
+        .route(
+            "/health",
+            get(|| async { Redirect::permanent("/api/health") }),
+        )
         .route("/api/jobs", get(jobs).delete(delete_all_jobs))
         .route("/api/security-events", get(security_events))
         .route("/api/watcher/pause", post(pause))
@@ -576,7 +655,10 @@ mod tests {
     use tower::ServiceExt;
 
     fn test_state(api_token: Option<&str>) -> Arc<AppState> {
-        let raw = RawConfig { api_token: api_token.map(String::from), ..Default::default() };
+        let raw = RawConfig {
+            api_token: api_token.map(String::from),
+            ..Default::default()
+        };
         let cfg = config::resolve(raw, &(|_: &str| None)).unwrap();
         let store = Arc::new(JobStore::new(":memory:").unwrap());
         let metrics = Metrics::new();
@@ -596,6 +678,7 @@ mod tests {
             watcher,
             file_mover: FileMover::new("/tmp/q"),
             security_events: Arc::new(Mutex::new(Vec::new())),
+            secret_store: None,
         })
     }
 
@@ -606,7 +689,10 @@ mod tests {
         assert!(!should_update_secret_field(Some("****cdef"), "abcdef")); // == mask of current
         assert!(!should_update_secret_field(Some("****"), "real")); // all stars
         assert!(!should_update_secret_field(Some("****1234"), "")); // masked-looking, <=12
-        assert!(should_update_secret_field(Some("sk-realnewkey-1234567"), "old"));
+        assert!(should_update_secret_field(
+            Some("sk-realnewkey-1234567"),
+            "old"
+        ));
     }
 
     #[test]
@@ -623,7 +709,12 @@ mod tests {
     async fn health_is_public() {
         let app = build_router(test_state(Some("secret")));
         let res = app
-            .oneshot(Request::builder().uri("/api/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
@@ -634,11 +725,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn health_reports_secrets_backend() {
+        let app = build_router(test_state(None));
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = res.into_body().collect().await.unwrap().to_bytes();
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["secretsBackend"], "file");
+    }
+
+    #[tokio::test]
+    async fn config_reports_secrets_backend() {
+        let app = build_router(test_state(None));
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/config")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.into_body().collect().await.unwrap().to_bytes();
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["secretsBackend"], "file");
+    }
+
+    #[test]
+    fn route_secrets_writes_to_store_and_clears_updates() {
+        use crate::secret_store::MemoryStore;
+        let store = MemoryStore::new();
+        let mut updates = RawConfig {
+            vt_api_key: Some("vt-new".into()),
+            api_token: Some("tok-new".into()),
+            ..Default::default()
+        };
+        route_secrets_to_store(&store, &mut updates).unwrap();
+        assert_eq!(
+            store.get(ACCOUNT_VT_API_KEY).unwrap().as_deref(),
+            Some("vt-new")
+        );
+        assert_eq!(
+            store.get(ACCOUNT_API_TOKEN).unwrap().as_deref(),
+            Some("tok-new")
+        );
+        // Stripped from updates → never written to config.json.
+        assert!(updates.vt_api_key.is_none());
+        assert!(updates.api_token.is_none());
+    }
+
+    #[test]
+    fn route_secrets_empty_value_clears_store() {
+        use crate::secret_store::MemoryStore;
+        let store = MemoryStore::new();
+        store.set(ACCOUNT_API_TOKEN, "old").unwrap();
+        let mut updates = RawConfig {
+            api_token: Some(String::new()), // explicit clear
+            ..Default::default()
+        };
+        route_secrets_to_store(&store, &mut updates).unwrap();
+        assert_eq!(store.get(ACCOUNT_API_TOKEN).unwrap(), None);
+        assert!(updates.api_token.is_none());
+    }
+
+    #[tokio::test]
     async fn protected_route_requires_token() {
         let app = build_router(test_state(Some("secret")));
         let res = app
             .clone()
-            .oneshot(Request::builder().uri("/api/jobs").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/jobs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
@@ -660,7 +828,12 @@ mod tests {
     async fn no_token_allows_protected_route() {
         let app = build_router(test_state(None));
         let res = app
-            .oneshot(Request::builder().uri("/api/jobs").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/jobs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);

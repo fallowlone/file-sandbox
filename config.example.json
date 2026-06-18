@@ -10,5 +10,6 @@
   "maxScanBytes": 419430400,
   "maxConcurrentScans": 2,
   "useSeparateVtProcess": false,
-  "inconclusiveRetentionDays": 0
+  "inconclusiveRetentionDays": 0,
+  "secretsBackend": "file"
 }

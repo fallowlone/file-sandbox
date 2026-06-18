@@ -28,6 +28,10 @@ const SECURITY_EVENT_CAP: usize = 200;
 #[tokio::main]
 async fn main() -> Result<()> {
     let cfg = config::load()?;
+    // Move any plaintext secrets in config.json into the Keychain when that
+    // backend is selected. Non-fatal: logs and continues from plaintext on
+    // failure. `cfg` already holds the resolved values, so no reload is needed.
+    config::run_secret_migration(cfg.secrets_backend);
     if cfg.vt_api_key.is_empty() {
         bail!("vtApiKey not set (config.json or VT_API_KEY)");
     }
@@ -78,7 +82,10 @@ async fn main() -> Result<()> {
             initial_mode: cfg.watcher_mode,
             vt_enabled: cfg.vt_enabled,
             on_mode_change: Some(Box::new(|m: WatcherMode| {
-                let updates = RawConfig { watcher_mode: Some(m.as_str().to_string()), ..Default::default() };
+                let updates = RawConfig {
+                    watcher_mode: Some(m.as_str().to_string()),
+                    ..Default::default()
+                };
                 if let Err(e) = config::write_config(updates) {
                     eprintln!("[config] failed to persist mode: {e}");
                 }
@@ -113,6 +120,7 @@ async fn main() -> Result<()> {
         watcher: watcher.clone(),
         file_mover: file_mover.clone(),
         security_events: security_events.clone(),
+        secret_store: config::active_secret_store(cfg.secrets_backend),
     });
 
     // HTTP UI.

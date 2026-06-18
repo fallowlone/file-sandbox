@@ -104,6 +104,12 @@ struct SettingsTabView: View {
                         .font(.system(size: 11, design: .monospaced))
                         .frame(width: 180)
                 }
+                SettingRow(label: "Secrets storage") {
+                    Text(settingsStore.secretsBackend == "keychain" ? "Keychain" : "config.json")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 180, alignment: .leading)
+                }
                 SettingRow(label: "Language") {
                     Picker("", selection: $localeRaw) {
                         ForEach(AppLocale.allCases) { loc in

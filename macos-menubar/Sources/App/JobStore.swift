@@ -49,10 +49,30 @@ struct JobsResponse: Codable {
 }
 
 enum ClientAuthStorage {
-    private static let key = "filesandboxClientAPIToken"
+    private static let account = "clientApiToken"
+    private static let legacyKey = "filesandboxClientAPIToken"
+
+    /// The bearer token sent to the daemon, stored in the Keychain. Reads
+    /// migrate any value left in `UserDefaults` by an older build, then erase it.
     static var token: String {
-        get { UserDefaults.standard.string(forKey: key) ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: key) }
+        get {
+            if let v = Keychain.read(account) { return v }
+            let legacy = UserDefaults.standard.string(forKey: legacyKey) ?? ""
+            if !legacy.isEmpty {
+                Keychain.write(account, legacy)
+                UserDefaults.standard.removeObject(forKey: legacyKey)
+                return legacy
+            }
+            return ""
+        }
+        set {
+            if newValue.isEmpty {
+                Keychain.delete(account)
+            } else {
+                Keychain.write(account, newValue)
+            }
+            UserDefaults.standard.removeObject(forKey: legacyKey)
+        }
     }
 }
 

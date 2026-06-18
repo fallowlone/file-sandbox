@@ -39,3 +39,13 @@ If the **ingest** container has `--network none`, it cannot talk to VT. Use **sp
 - Set **`apiToken`** in `config.json` or **`FILESANDBOX_API_TOKEN`** so clients must send `Authorization: Bearer …` or `X-Filesandbox-Token` (health endpoints stay public).
 - Optional **`FILESANDBOX_MASTER_KEY`**: encrypts `config.json` at rest (AES-256-GCM). SQLite is still a plain file unless you add SQLCipher or OS-level encryption.
 - Do not expose VT API keys in the UI or client-side code; the daemon masks them in `GET /api/config`.
+
+## Secrets in the Keychain (macOS)
+
+Set **`secretsBackend: "keychain"`** in `config.json` (or **`SECRETS_BACKEND=keychain`**) to keep `vtApiKey` and `apiToken` in the macOS Keychain instead of plaintext in `config.json`.
+
+- **Service** `dev.artemmac.filesandbox`, accounts `vtApiKey` / `apiToken` (generic-password items).
+- **One-time migration at startup:** any plaintext secret in `config.json` is written to the Keychain, **read back to verify**, then blanked from the file. A verify failure aborts before blanking, so a failed write never loses the secret.
+- **Precedence:** Keychain > `config.json` > env var.
+- **Fail-safe:** default is `"file"` (legacy behaviour). If the Keychain is unreadable (e.g. a locked login keychain in a headless LaunchAgent session) the daemon logs and falls back to file/env values rather than crashing. The login keychain must be unlocked in the GUI session for Keychain access to succeed.
+- The menu bar app stores its own client bearer token in the Keychain too (account `clientApiToken`), migrating off `UserDefaults` on first launch.

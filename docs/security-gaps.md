@@ -81,6 +81,7 @@ flowchart LR
 
 - `config.json` с ключом VT, SQLite с путями/историей — **читаемы процессами того же пользователя**.
 - Опционально: переменная **`FILESANDBOX_MASTER_KEY`** (64 hex-символа или base64 на 32 байта) — весь `config.json` шифруется на диске (AES-256-GCM, префикс `FSENC1:`). Без ключа процесс не стартует.
+- Опционально: **`secretsBackend: "keychain"`** (или `SECRETS_BACKEND=keychain`) — `vtApiKey` и `apiToken` хранятся в macOS Keychain, а не плейнтекстом в `config.json`; при старте плейнтекст мигрирует в Keychain (запись → verify-read → затирание поля). Меню-бар хранит свой bearer-токен в Keychain (account `clientApiToken`), а не в `UserDefaults`. Подробности — [security-hardening.md](security-hardening.md). Защищает от чтения секрета через `config.json`/plist, но **не** от процесса того же UID с доступом к разблокированному login-keychain.
 - **Шифрование SQLite** в этом репозитории не реализовано (нужен SQLCipher/SEE или внешнее шифрование файла БД).
 
 ---

@@ -107,7 +107,8 @@ Full template (same as `config.example.json`):
   "maxScanBytes": 419430400,
   "maxConcurrentScans": 2,
   "useSeparateVtProcess": false,
-  "inconclusiveRetentionDays": 0
+  "inconclusiveRetentionDays": 0,
+  "secretsBackend": "file"
 }
 ```
 
@@ -119,10 +120,11 @@ Full template (same as `config.example.json`):
 | `maxConcurrentScans`        | Parallel VT pipelines (minimum 1).                                                                         |
 | `useSeparateVtProcess`      | No-op in the Rust daemon (VT runs in-process). Kept for config compatibility.                              |
 | `inconclusiveRetentionDays` | `0` = never auto-delete inconclusive quarantine; `N` = hourly sweep deletes after N days.                  |
+| `secretsBackend`            | `file` (default) keeps secrets in `config.json`; `keychain` stores `vtApiKey`/`apiToken` in the macOS Keychain (migrated on startup). See [docs/security-hardening.md](docs/security-hardening.md). |
 
 Get a free VirusTotal API key at [virustotal.com](https://www.virustotal.com/gui/join-us).
 
-> **env fallback** — CI can override: `VT_API_KEY`, `FILESANDBOX_API_TOKEN`, `WATCH_PATH`, `QUARANTINE_PATH`, `DATABASE_PATH`, `HTTP_PORT`, `HTTP_HOST`, `WATCH_RECURSIVE`, `MAX_SCAN_BYTES`, `MAX_CONCURRENT_SCANS`, `INCONCLUSIVE_RETENTION_DAYS`. Optional: `FILESANDBOX_MASTER_KEY` (encrypt `config.json` at rest), `FILESANDBOX_ALLOW_LAN=1` (allow binding `httpHost` to non-loopback).
+> **env fallback** — CI can override: `VT_API_KEY`, `FILESANDBOX_API_TOKEN`, `WATCH_PATH`, `QUARANTINE_PATH`, `DATABASE_PATH`, `HTTP_PORT`, `HTTP_HOST`, `WATCH_RECURSIVE`, `MAX_SCAN_BYTES`, `MAX_CONCURRENT_SCANS`, `INCONCLUSIVE_RETENTION_DAYS`. Optional: `FILESANDBOX_MASTER_KEY` (encrypt `config.json` at rest), `FILESANDBOX_ALLOW_LAN=1` (allow binding `httpHost` to non-loopback), `SECRETS_BACKEND=keychain` (store secrets in the macOS Keychain).
 
 ---
 

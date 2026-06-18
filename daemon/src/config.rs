@@ -3,10 +3,9 @@
 //! precedence (file value > env var > default) and the same defaults as the Node
 //! implementation. Supports the `FSENC1:` encrypted-at-rest config.
 
-use crate::config_crypto::{
-    decrypt_config_json, encrypt_config_json, is_encrypted_config_payload,
-};
+use crate::config_crypto::{decrypt_config_json, encrypt_config_json, is_encrypted_config_payload};
 use crate::mode::{parse_mode, WatcherMode};
+use crate::secret_store::{self, SecretStore};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -18,6 +17,34 @@ const DEFAULT_MAX_SCAN: u64 = 400 * 1024 * 1024;
 pub enum FailureMode {
     Bypass,
     Inconclusive,
+}
+
+/// Where secrets (`vtApiKey`, `apiToken`) are read from. `File` keeps the legacy
+/// plaintext-in-`config.json` behaviour; `Keychain` overlays the macOS Keychain
+/// over the file/env values. Default is `File` so existing installs are unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SecretsBackend {
+    #[default]
+    File,
+    Keychain,
+}
+
+impl SecretsBackend {
+    fn from_str(s: &str) -> Self {
+        if s.trim().eq_ignore_ascii_case("keychain") {
+            SecretsBackend::Keychain
+        } else {
+            SecretsBackend::File
+        }
+    }
+
+    /// Stable string form for config.json and API responses.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SecretsBackend::File => "file",
+            SecretsBackend::Keychain => "keychain",
+        }
+    }
 }
 
 /// Raw, fully-optional shape as stored in `config.json` (camelCase keys).
@@ -41,6 +68,7 @@ pub struct RawConfig {
     pub pompelmi_failure_mode: Option<String>,
     pub watcher_mode: Option<String>,
     pub vt_enabled: Option<bool>,
+    pub secrets_backend: Option<String>,
 }
 
 /// Resolved configuration with concrete values and defaults applied.
@@ -64,6 +92,7 @@ pub struct Config {
     pub watcher_mode: WatcherMode,
     pub vt_enabled: bool,
     pub config_encrypted_at_rest: bool,
+    pub secrets_backend: SecretsBackend,
 }
 
 fn config_path() -> PathBuf {
@@ -144,7 +173,7 @@ pub fn resolve(file: RawConfig, env: &impl Fn(&str) -> Option<String>) -> Result
             Some(s) if s.is_empty() => None,
             Some(s) => {
                 let n: f64 = s.parse().map_err(|_| anyhow!("httpPort must be 1-65535"))?;
-                if !n.is_finite() || n < 1.0 || n > 65535.0 {
+                if !(1.0..=65535.0).contains(&n) {
                     bail!("httpPort must be 1-65535");
                 }
                 Some(n as u16)
@@ -206,16 +235,55 @@ pub fn resolve(file: RawConfig, env: &impl Fn(&str) -> Option<String>) -> Result
             .or_else(|| env("POMPELMI_SOCKET"))
             .unwrap_or_else(|| "/tmp/clamd.sock".to_string()),
         pompelmi_failure_mode,
-        watcher_mode: parse_mode(
-            file.watcher_mode
-                .or_else(|| env("WATCHER_MODE"))
-                .as_deref(),
-        ),
+        watcher_mode: parse_mode(file.watcher_mode.or_else(|| env("WATCHER_MODE")).as_deref()),
         vt_enabled: file
             .vt_enabled
             .unwrap_or_else(|| env_bool(env, "VT_ENABLED", true)),
         config_encrypted_at_rest: master_key_from_env(env).is_some(),
+        secrets_backend: SecretsBackend::from_str(
+            &file
+                .secrets_backend
+                .or_else(|| env("SECRETS_BACKEND"))
+                .unwrap_or_default(),
+        ),
     })
+}
+
+/// Overlay secrets from `store` onto an already-resolved `cfg`. A non-empty
+/// stored value wins over the file/env value (Keychain > config.json > env); an
+/// absent or empty stored secret leaves the resolved field untouched. Pure with
+/// respect to the OS — call with any [`SecretStore`], including a test double.
+pub fn apply_secret_store(cfg: &mut Config, store: &dyn SecretStore) -> Result<()> {
+    if let Some(v) = store
+        .get(secret_store::ACCOUNT_VT_API_KEY)?
+        .filter(|v| !v.is_empty())
+    {
+        cfg.vt_api_key = v;
+    }
+    if let Some(v) = store
+        .get(secret_store::ACCOUNT_API_TOKEN)?
+        .filter(|v| !v.is_empty())
+    {
+        cfg.api_token = v;
+    }
+    Ok(())
+}
+
+/// Overlay the macOS Keychain over `cfg`. On read failure (e.g. a locked login
+/// keychain in a headless LaunchAgent session) the file/env values are kept and
+/// the error is logged — never fatal. A no-op announcing the limitation on
+/// non-macOS platforms.
+#[cfg(target_os = "macos")]
+fn apply_keychain_secrets(cfg: &mut Config) {
+    let store = secret_store::KeychainStore::new();
+    if let Err(e) = apply_secret_store(cfg, &store) {
+        eprintln!("[secrets] keychain read failed, using file/env values: {e}");
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn apply_keychain_secrets(_cfg: &mut Config) {
+    eprintln!("[secrets] keychain backend unsupported on this platform; using file/env values");
 }
 
 /// Load configuration from `config.json` in the CWD overlaid with the process
@@ -226,7 +294,11 @@ pub fn load() -> Result<Config> {
     let raw = read_config_file_raw(&path);
     let mk = master_key_from_env(&env);
     let file = decode_config(&raw, mk.as_deref())?;
-    resolve(file, &env)
+    let mut cfg = resolve(file, &env)?;
+    if cfg.secrets_backend == SecretsBackend::Keychain {
+        apply_keychain_secrets(&mut cfg);
+    }
+    Ok(cfg)
 }
 
 fn read_config_file_raw(path: &Path) -> String {
@@ -315,6 +387,9 @@ fn merge_raw(current: &mut RawConfig, updates: RawConfig) {
     if updates.vt_enabled.is_some() {
         current.vt_enabled = updates.vt_enabled;
     }
+    if updates.secrets_backend.is_some() {
+        current.secrets_backend = updates.secrets_backend;
+    }
 }
 
 /// Read `config.json`, overlay `updates`, and write it back (re-encrypting when
@@ -329,6 +404,102 @@ pub fn write_config(updates: RawConfig) -> Result<()> {
     let body = serialize_for_disk(&current, mk.as_deref())?;
     std::fs::write(&path, body).with_context(|| format!("write {}", path.display()))?;
     Ok(())
+}
+
+fn store_has(store: &dyn SecretStore, account: &str) -> Result<bool> {
+    Ok(store.get(account)?.filter(|v| !v.is_empty()).is_some())
+}
+
+/// Converge plaintext secrets from `config.json` into `store`: each plaintext
+/// value is written, **verify-read back**, and only then is its plaintext copy
+/// blanked from the file. A verify mismatch aborts before any blanking so a
+/// failed write can never lose the secret. Stale plaintext already mirrored in
+/// the store is blanked without rewriting. Returns the number of secrets written
+/// to the store. Reads the same `config.json` and master key as [`load`].
+pub fn migrate_secrets_to_keychain(store: &dyn SecretStore) -> Result<usize> {
+    let env = |name: &str| std::env::var(name).ok();
+    let path = config_path();
+    let raw = read_config_file_raw(&path);
+    let mk = master_key_from_env(&env);
+    let file = decode_config(&raw, mk.as_deref())?;
+
+    let vt = file.vt_api_key.clone();
+    let tok = file.api_token.clone();
+    let states = [
+        secret_store::SecretState {
+            account: secret_store::ACCOUNT_VT_API_KEY,
+            file_value: vt.as_deref(),
+            in_store: store_has(store, secret_store::ACCOUNT_VT_API_KEY)?,
+        },
+        secret_store::SecretState {
+            account: secret_store::ACCOUNT_API_TOKEN,
+            file_value: tok.as_deref(),
+            in_store: store_has(store, secret_store::ACCOUNT_API_TOKEN)?,
+        },
+    ];
+    let plan = secret_store::plan_secret_migration(&states);
+    if plan.is_empty() {
+        return Ok(0);
+    }
+
+    // Write each secret and read it back before trusting it. Bail before any
+    // blanking so a half-written secret never gets stripped from the file.
+    for (account, value) in &plan.writes {
+        store
+            .set(account, value)
+            .with_context(|| format!("keychain set {account}"))?;
+        if store.get(account)?.as_deref() != Some(value.as_str()) {
+            bail!("keychain verify failed for {account}; leaving plaintext in config.json");
+        }
+    }
+
+    // Every blank_file_fields entry is now confirmed in the store (just-written
+    // and verified, or pre-existing). Clear their plaintext copies.
+    let mut updates = RawConfig::default();
+    for account in &plan.blank_file_fields {
+        match account.as_str() {
+            secret_store::ACCOUNT_VT_API_KEY => updates.vt_api_key = Some(String::new()),
+            secret_store::ACCOUNT_API_TOKEN => updates.api_token = Some(String::new()),
+            _ => {}
+        }
+    }
+    write_config(updates)?;
+    Ok(plan.writes.len())
+}
+
+/// Startup hook: when the keychain backend is active, migrate plaintext secrets
+/// into the macOS Keychain. Never fatal — a failure logs and leaves the file as
+/// is so the daemon can still start from plaintext. No-op on non-macOS.
+#[cfg(target_os = "macos")]
+pub fn run_secret_migration(backend: SecretsBackend) {
+    if backend != SecretsBackend::Keychain {
+        return;
+    }
+    let store = secret_store::KeychainStore::new();
+    match migrate_secrets_to_keychain(&store) {
+        Ok(0) => {}
+        Ok(n) => eprintln!("[secrets] migrated {n} key(s) to keychain"),
+        Err(e) => eprintln!("[secrets] migration skipped: {e}"),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn run_secret_migration(_backend: SecretsBackend) {}
+
+/// The live [`SecretStore`] for the active backend, or `None` when secrets live
+/// in `config.json` (the `File` backend). Callers route secret writes through
+/// the returned store; `None` means write secrets to the file as before.
+#[cfg(target_os = "macos")]
+pub fn active_secret_store(backend: SecretsBackend) -> Option<std::sync::Arc<dyn SecretStore>> {
+    match backend {
+        SecretsBackend::Keychain => Some(std::sync::Arc::new(secret_store::KeychainStore::new())),
+        SecretsBackend::File => None,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn active_secret_store(_backend: SecretsBackend) -> Option<std::sync::Arc<dyn SecretStore>> {
+    None
 }
 
 #[cfg(test)]
@@ -455,5 +626,91 @@ mod tests {
         assert_eq!(mask_secret("", 4), "");
         assert_eq!(mask_secret("abcd", 4), "****");
         assert_eq!(mask_secret("abcdefgh", 4), "****efgh");
+    }
+
+    #[test]
+    fn secrets_backend_defaults_to_file() {
+        let cfg = resolve(RawConfig::default(), &env_from(&HashMap::new())).unwrap();
+        assert_eq!(cfg.secrets_backend, SecretsBackend::File);
+    }
+
+    #[test]
+    fn secrets_backend_from_file_field() {
+        let file = RawConfig {
+            secrets_backend: Some("keychain".into()),
+            ..Default::default()
+        };
+        let cfg = resolve(file, &env_from(&HashMap::new())).unwrap();
+        assert_eq!(cfg.secrets_backend, SecretsBackend::Keychain);
+    }
+
+    #[test]
+    fn secrets_backend_from_env() {
+        let mut env_map = HashMap::new();
+        env_map.insert("SECRETS_BACKEND", "keychain");
+        let cfg = resolve(RawConfig::default(), &env_from(&env_map)).unwrap();
+        assert_eq!(cfg.secrets_backend, SecretsBackend::Keychain);
+    }
+
+    #[test]
+    fn secrets_backend_unknown_value_is_file() {
+        let file = RawConfig {
+            secrets_backend: Some("vault".into()),
+            ..Default::default()
+        };
+        let cfg = resolve(file, &env_from(&HashMap::new())).unwrap();
+        assert_eq!(cfg.secrets_backend, SecretsBackend::File);
+    }
+
+    #[test]
+    fn apply_secret_store_overlays_both_secrets() {
+        use crate::secret_store::{MemoryStore, ACCOUNT_API_TOKEN, ACCOUNT_VT_API_KEY};
+        let mut cfg = resolve(RawConfig::default(), &env_from(&HashMap::new())).unwrap();
+        let store = MemoryStore::new();
+        store.set(ACCOUNT_VT_API_KEY, "vt-from-keychain").unwrap();
+        store.set(ACCOUNT_API_TOKEN, "tok-from-keychain").unwrap();
+        apply_secret_store(&mut cfg, &store).unwrap();
+        assert_eq!(cfg.vt_api_key, "vt-from-keychain");
+        assert_eq!(cfg.api_token, "tok-from-keychain");
+    }
+
+    #[test]
+    fn apply_secret_store_keeps_resolved_value_when_store_empty() {
+        use crate::secret_store::MemoryStore;
+        let file = RawConfig {
+            vt_api_key: Some("vt-from-file".into()),
+            api_token: Some("tok-from-file".into()),
+            ..Default::default()
+        };
+        let mut cfg = resolve(file, &env_from(&HashMap::new())).unwrap();
+        let store = MemoryStore::new(); // empty
+        apply_secret_store(&mut cfg, &store).unwrap();
+        assert_eq!(cfg.vt_api_key, "vt-from-file");
+        assert_eq!(cfg.api_token, "tok-from-file");
+    }
+
+    #[test]
+    fn apply_secret_store_wins_over_file() {
+        use crate::secret_store::{MemoryStore, ACCOUNT_VT_API_KEY};
+        let file = RawConfig {
+            vt_api_key: Some("vt-from-file".into()),
+            ..Default::default()
+        };
+        let mut cfg = resolve(file, &env_from(&HashMap::new())).unwrap();
+        let store = MemoryStore::new();
+        store.set(ACCOUNT_VT_API_KEY, "vt-from-keychain").unwrap();
+        apply_secret_store(&mut cfg, &store).unwrap();
+        assert_eq!(cfg.vt_api_key, "vt-from-keychain"); // keychain wins
+    }
+
+    #[test]
+    fn merge_raw_overlays_secrets_backend() {
+        let mut current = RawConfig::default();
+        let updates = RawConfig {
+            secrets_backend: Some("keychain".into()),
+            ..Default::default()
+        };
+        merge_raw(&mut current, updates);
+        assert_eq!(current.secrets_backend.as_deref(), Some("keychain"));
     }
 }

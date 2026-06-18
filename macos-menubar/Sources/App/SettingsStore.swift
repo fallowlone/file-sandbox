@@ -16,6 +16,7 @@ struct DaemonConfig: Codable {
     var useSeparateVtProcess: Bool?
     var inconclusiveRetentionDays: Int?
     var configEncryptedAtRest: Bool?
+    var secretsBackend: String?
     var watcherMode: String?
     var vtEnabled: Bool?
     var pompelmiEnabled: Bool?
@@ -57,6 +58,8 @@ class SettingsStore: ObservableObject {
     @Published var pompelmiEnabled: Bool = true
     @Published var pompelmiSocketPath: String = "/tmp/clamd.sock"
     @Published var pompelmiFailureMode: String = "bypass"
+    /// Read-only: where the daemon keeps secrets ("file" or "keychain").
+    @Published var secretsBackend: String = "file"
 
     // Stored locally — no daemon required (used when daemon is offline)
     @Published var daemonProjectPath: String = ""
@@ -133,6 +136,7 @@ class SettingsStore: ObservableObject {
                 self.pompelmiEnabled = decoded.pompelmiEnabled ?? true
                 self.pompelmiSocketPath = decoded.pompelmiSocketPath ?? "/tmp/clamd.sock"
                 self.pompelmiFailureMode = decoded.pompelmiFailureMode ?? "bypass"
+                self.secretsBackend = decoded.secretsBackend ?? "file"
             }
         }.resume()
     }
