@@ -61,13 +61,19 @@ impl AppState {
             .store
             .get_job(id)?
             .ok_or_else(|| anyhow!("Job {id} not found"))?;
-        if job.status != "quarantine_kept" {
-            bail!("Job {id} is not in quarantine_kept status");
+        // Deletable terminal states: a kept file the user discards, or a
+        // failed/cancelled job whose quarantine file would otherwise orphan.
+        if !matches!(
+            job.status.as_str(),
+            "quarantine_kept" | "failed" | "cancelled"
+        ) {
+            bail!("Job {id} is not in a deletable state (status: {})", job.status);
         }
-        let q = job
-            .quarantine_path
-            .ok_or_else(|| anyhow!("Job {id} has no quarantine path"))?;
-        self.file_mover.delete_file(FsPath::new(&q)).await?;
+        // The file may be absent (e.g. a job that failed before quarantine);
+        // delete_file is idempotent, and the row should still be cleared.
+        if let Some(q) = job.quarantine_path.as_deref() {
+            self.file_mover.delete_file(FsPath::new(q)).await?;
+        }
         self.store.set_deleted(id, detail)?; // may yield JobConflictError
         Ok(())
     }
@@ -266,8 +272,20 @@ async fn set_mode(State(st): State<Arc<AppState>>, Json(body): Json<Value>) -> R
 
 async fn delete_all_jobs(State(st): State<Arc<AppState>>) -> Response {
     match st.store.clear_all() {
-        Ok(res) => Json(json!({ "ok": true, "deleted": res.deleted, "skipped": res.skipped }))
-            .into_response(),
+        Ok(res) => {
+            // Unlink the underlying quarantine files so clearing job history does
+            // not leave orphaned (possibly malicious) files stranded on disk.
+            for p in &res.quarantine_paths {
+                let _ = st.file_mover.delete_file(FsPath::new(p)).await;
+            }
+            Json(json!({
+                "ok": true,
+                "deleted": res.deleted,
+                "skipped": res.skipped,
+                "filesRemoved": res.quarantine_paths.len(),
+            }))
+            .into_response()
+        }
         Err(e) => server_error(e.to_string()),
     }
 }

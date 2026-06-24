@@ -127,8 +127,11 @@ impl LocalScanner {
     }
 
     /// Stream the file to clamd via the INSTREAM command and return its raw reply.
+    /// The file is read from disk in `INSTREAM_CHUNK`-sized reads and forwarded
+    /// chunk-by-chunk, so memory stays bounded to one chunk regardless of file
+    /// size — a multi-GB drop cannot OOM the daemon here.
     async fn scan_instream(&self, file_path: &Path) -> Result<String> {
-        let bytes = tokio::fs::read(file_path)
+        let mut file = tokio::fs::File::open(file_path)
             .await
             .with_context(|| format!("read {} for scan", file_path.display()))?;
 
@@ -137,9 +140,17 @@ impl LocalScanner {
             .with_context(|| format!("connect clamd at {}", self.socket_path))?;
 
         sock.write_all(b"zINSTREAM\0").await?;
-        for chunk in bytes.chunks(INSTREAM_CHUNK) {
-            sock.write_all(&(chunk.len() as u32).to_be_bytes()).await?;
-            sock.write_all(chunk).await?;
+        let mut buf = vec![0u8; INSTREAM_CHUNK];
+        loop {
+            let n = file
+                .read(&mut buf)
+                .await
+                .with_context(|| format!("read {} for scan", file_path.display()))?;
+            if n == 0 {
+                break;
+            }
+            sock.write_all(&(n as u32).to_be_bytes()).await?;
+            sock.write_all(&buf[..n]).await?;
         }
         // Zero-length chunk terminates the stream.
         sock.write_all(&0u32.to_be_bytes()).await?;

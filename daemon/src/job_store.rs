@@ -55,11 +55,13 @@ pub struct ScanResult {
     pub message: String,
 }
 
-/// Result of `clear_all`: settled rows removed vs active rows kept.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Result of `clear_all`: settled rows removed vs active rows kept, plus the
+/// quarantine files those removed rows referenced so the caller can unlink them.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClearResult {
     pub deleted: usize,
     pub skipped: i64,
+    pub quarantine_paths: Vec<String>,
 }
 
 /// Columns selected by `list_recent` / `get_job` / `list_inconclusive_older_than`,
@@ -224,17 +226,40 @@ impl JobStore {
 
     pub fn set_deleted(&self, job_id: &str, detail: &str) -> Result<()> {
         let now = now_ms();
+        // Deletable terminal states: a kept file the user discards, or a
+        // failed/cancelled job whose quarantine file would otherwise orphan.
         let changes = self.db.lock().expect("job store mutex poisoned").execute(
-            "UPDATE jobs SET status = 'deleted', detail = ?, updated_at = ? WHERE id = ? AND status = 'quarantine_kept'",
+            "UPDATE jobs SET status = 'deleted', detail = ?, updated_at = ? \
+             WHERE id = ? AND status IN ('quarantine_kept', 'failed', 'cancelled')",
             params![detail, now, job_id],
         )?;
         if changes == 0 {
             return Err(JobConflictError(format!(
-                "Job {job_id} cannot be deleted: not in quarantine_kept status (may have been deleted or processed)"
+                "Job {job_id} cannot be deleted: not in a deletable state (may have been deleted or still processing)"
             ))
             .into());
         }
         Ok(())
+    }
+
+    /// Basenames of every quarantine file currently referenced by a job row.
+    /// Used by the startup reconciler to identify on-disk orphans (files with no
+    /// matching row) for removal.
+    pub fn all_quarantine_basenames(&self) -> Result<Vec<String>> {
+        let db = self.db.lock().expect("job store mutex poisoned");
+        let mut stmt =
+            db.prepare("SELECT quarantine_path FROM jobs WHERE quarantine_path IS NOT NULL")?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|p| {
+                Path::new(&p)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+            })
+            .collect())
     }
 
     /// Inconclusive rows kept in quarantine with `created_at` before `cutoff_ms`.
@@ -261,22 +286,31 @@ impl JobStore {
     }
 
     /// Delete settled rows. Active rows (`received`, `in_quarantine`, `scanning`)
-    /// are kept so in-flight pipeline stages retain their row reference.
+    /// are kept so in-flight pipeline stages retain their row reference. Returns
+    /// the quarantine paths of the removed rows so the caller can unlink the
+    /// underlying files — otherwise they orphan on disk with no way to clean up.
     pub fn clear_all(&self) -> Result<ClearResult> {
-        let skipped: i64 = self
-            .db
-            .lock()
-            .expect("job store mutex poisoned")
-            .query_row(
-            "SELECT COUNT(*) FROM jobs WHERE status IN ('received', 'in_quarantine', 'scanning')",
-            [],
-            |row| row.get(0),
-        )?;
-        let deleted = self.db.lock().expect("job store mutex poisoned").execute(
-            "DELETE FROM jobs WHERE status NOT IN ('received', 'in_quarantine', 'scanning')",
-            [],
-        )?;
-        Ok(ClearResult { deleted, skipped })
+        const ACTIVE: &str = "status IN ('received', 'in_quarantine', 'scanning')";
+        let db = self.db.lock().expect("job store mutex poisoned");
+        let skipped: i64 =
+            db.query_row(&format!("SELECT COUNT(*) FROM jobs WHERE {ACTIVE}"), [], |row| {
+                row.get(0)
+            })?;
+        let quarantine_paths: Vec<String> = {
+            let mut stmt = db.prepare(&format!(
+                "SELECT quarantine_path FROM jobs WHERE NOT ({ACTIVE}) AND quarantine_path IS NOT NULL"
+            ))?;
+            let collected = stmt
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            collected
+        };
+        let deleted = db.execute(&format!("DELETE FROM jobs WHERE NOT ({ACTIVE})"), [])?;
+        Ok(ClearResult {
+            deleted,
+            skipped,
+            quarantine_paths,
+        })
     }
 }
 
@@ -492,6 +526,48 @@ mod tests {
         assert!(store.get_job("done-1").unwrap().is_none());
         assert!(store.get_job("active-1").unwrap().is_some());
         assert!(store.get_job("active-2").unwrap().is_some());
+    }
+
+    #[test]
+    fn clear_all_returns_quarantine_paths_of_removed_rows() {
+        let store = fresh_store();
+        store.insert_received("kept", "/s", "s").unwrap();
+        store.set_in_quarantine("kept", "/q/uuid_s.bin").unwrap();
+        store
+            .set_scan_result(
+                "kept",
+                &ScanResult {
+                    verdict: "infected".into(),
+                    message: "x".into(),
+                },
+            )
+            .unwrap(); // → quarantine_kept
+
+        let res = store.clear_all().unwrap();
+        assert_eq!(res.deleted, 1);
+        assert_eq!(res.quarantine_paths, vec!["/q/uuid_s.bin".to_string()]);
+    }
+
+    #[test]
+    fn set_deleted_allows_failed_and_cancelled_terminal_states() {
+        let store = fresh_store();
+        store.insert_received("f", "/s", "s").unwrap();
+        store.fail("f", "boom").unwrap();
+        // failed → now deletable so its quarantine file can be reclaimed.
+        store.set_deleted("f", "cleanup").unwrap();
+        assert_eq!(store.get_job("f").unwrap().unwrap().status, "deleted");
+    }
+
+    #[test]
+    fn all_quarantine_basenames_lists_only_referenced_files() {
+        let store = fresh_store();
+        store.insert_received("a", "/s", "s").unwrap();
+        store
+            .set_in_quarantine("a", "/quarantine/uuid_a.bin")
+            .unwrap();
+        store.insert_received("b", "/s2", "s2").unwrap(); // no quarantine path
+        let names = store.all_quarantine_basenames().unwrap();
+        assert_eq!(names, vec!["uuid_a.bin".to_string()]);
     }
 
     #[test]

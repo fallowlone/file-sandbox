@@ -62,6 +62,10 @@ async fn main() -> Result<()> {
     };
 
     let job_store = Arc::new(JobStore::new(&cfg.database_path)?);
+    // Reclaim disk: remove quarantine files left behind with no job row (e.g. by a
+    // prior clear-all on an old build, or a crash). Safe at startup — no scan is
+    // in flight yet, so every on-disk file either has a row or is a true orphan.
+    reconcile_quarantine_dir(Path::new(&cfg.quarantine_path), &job_store).await;
     let metrics = Metrics::new();
     let file_mover = FileMover::new(&cfg.quarantine_path);
 
@@ -162,4 +166,36 @@ async fn main() -> Result<()> {
     tokio::signal::ctrl_c().await?;
     eprintln!("[file-sandbox] shutting down");
     Ok(())
+}
+
+/// Remove quarantine files that no job row references — orphans that would
+/// otherwise accumulate forever (the daemon never knew their paths to clean up).
+async fn reconcile_quarantine_dir(quarantine_dir: &Path, job_store: &JobStore) {
+    let known: std::collections::HashSet<String> = match job_store.all_quarantine_basenames() {
+        Ok(v) => v.into_iter().collect(),
+        Err(e) => {
+            eprintln!("[reconcile] skipped (cannot read job rows): {e}");
+            return;
+        }
+    };
+    let mut rd = match tokio::fs::read_dir(quarantine_dir).await {
+        Ok(r) => r,
+        Err(_) => return, // dir not created yet → nothing to reconcile
+    };
+    let mut removed = 0usize;
+    while let Ok(Some(entry)) = rd.next_entry().await {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if known.contains(&name) {
+            continue;
+        }
+        // Only unlink regular files; never follow into anything unexpected.
+        if let Ok(meta) = tokio::fs::symlink_metadata(entry.path()).await {
+            if meta.is_file() && tokio::fs::remove_file(entry.path()).await.is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    if removed > 0 {
+        eprintln!("[reconcile] removed {removed} orphaned quarantine file(s) with no job row");
+    }
 }
