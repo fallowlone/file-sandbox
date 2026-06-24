@@ -121,9 +121,8 @@ impl FileMover {
                 alt
             }
             Err(e) => {
-                return Err(e).with_context(|| {
-                    format!("create restore target {}", preferred_dest.display())
-                })
+                return Err(e)
+                    .with_context(|| format!("create restore target {}", preferred_dest.display()))
             }
         };
 

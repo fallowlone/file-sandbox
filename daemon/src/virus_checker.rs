@@ -718,8 +718,7 @@ mod tests {
         let token = CancellationToken::new();
         token.cancel(); // already cancelled before any network call
 
-        let res =
-            virus_check_file("fake-key", &file, Some(&token), 1_000_000, true, |_| {}).await;
+        let res = virus_check_file("fake-key", &file, Some(&token), 1_000_000, true, |_| {}).await;
         assert_eq!(res.verdict, VirusVerdict::Inconclusive);
         assert_eq!(res.message, "Cancelled by user");
     }

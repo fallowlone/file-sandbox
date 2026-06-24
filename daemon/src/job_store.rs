@@ -292,10 +292,11 @@ impl JobStore {
     pub fn clear_all(&self) -> Result<ClearResult> {
         const ACTIVE: &str = "status IN ('received', 'in_quarantine', 'scanning')";
         let db = self.db.lock().expect("job store mutex poisoned");
-        let skipped: i64 =
-            db.query_row(&format!("SELECT COUNT(*) FROM jobs WHERE {ACTIVE}"), [], |row| {
-                row.get(0)
-            })?;
+        let skipped: i64 = db.query_row(
+            &format!("SELECT COUNT(*) FROM jobs WHERE {ACTIVE}"),
+            [],
+            |row| row.get(0),
+        )?;
         let quarantine_paths: Vec<String> = {
             let mut stmt = db.prepare(&format!(
                 "SELECT quarantine_path FROM jobs WHERE NOT ({ACTIVE}) AND quarantine_path IS NOT NULL"

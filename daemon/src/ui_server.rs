@@ -67,7 +67,10 @@ impl AppState {
             job.status.as_str(),
             "quarantine_kept" | "failed" | "cancelled"
         ) {
-            bail!("Job {id} is not in a deletable state (status: {})", job.status);
+            bail!(
+                "Job {id} is not in a deletable state (status: {})",
+                job.status
+            );
         }
         // The file may be absent (e.g. a job that failed before quarantine);
         // delete_file is idempotent, and the row should still be cleared.
@@ -590,7 +593,11 @@ async fn auth(State(st): State<Arc<AppState>>, req: Request, next: Next) -> Resp
         *req.method(),
         Method::POST | Method::DELETE | Method::PUT | Method::PATCH
     ) {
-        if let Some(origin) = req.headers().get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
+        if let Some(origin) = req
+            .headers()
+            .get(header::ORIGIN)
+            .and_then(|v| v.to_str().ok())
+        {
             if !origin_is_allowed(origin, bind_host) {
                 return forbidden("Forbidden: cross-origin request");
             }
@@ -889,7 +896,10 @@ mod tests {
         assert!(origin_is_allowed("http://127.0.0.1:3847", "127.0.0.1"));
         assert!(origin_is_allowed("http://localhost:3847", "127.0.0.1"));
         assert!(!origin_is_allowed("https://evil.example.com", "127.0.0.1"));
-        assert!(!origin_is_allowed("http://evil.example.com:3847", "127.0.0.1"));
+        assert!(!origin_is_allowed(
+            "http://evil.example.com:3847",
+            "127.0.0.1"
+        ));
     }
 
     #[test]
