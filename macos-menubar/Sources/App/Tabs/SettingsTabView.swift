@@ -5,7 +5,6 @@ struct SettingsTabView: View {
     @ObservedObject var settingsStore: SettingsStore
     @ObservedObject var store: JobStore
     @AppStorage("filesandbox.locale") private var localeRaw: String = AppLocale.auto.rawValue
-    @StateObject private var sandboxCfg = SandboxConfigVM()
 
     /// Debounced auto-save: any @Published change triggers `save()` 400 ms later.
     @State private var saveTimer: AnyCancellable? = nil
@@ -61,6 +60,26 @@ struct SettingsTabView: View {
                 SettingRow(label: "VirusTotal") {
                     AppSwitch(isOn: bind($settingsStore.vtEnabled))
                 }
+                if settingsStore.vtEnabled {
+                    SettingRow(label: "VT mode", indent: 16) {
+                        Picker("", selection: bind($settingsStore.vtHashOnly)) {
+                            Text("Hash-only (private)").tag(true)
+                            Text("Upload content").tag(false)
+                        }
+                        .pickerStyle(.menu)
+                        .frame(width: 220)
+                        .labelsHidden()
+                    }
+                    Text(settingsStore.vtHashOnly
+                        ? "Hash-only: sends just the file's SHA-256 to VirusTotal. File content never leaves your Mac. A file VirusTotal has never seen stays quarantined as inconclusive."
+                        : "Upload: sends the FULL file content to virustotal.com for any file it hasn't seen before. VirusTotal retains uploaded samples and shares them with its subscribers — do NOT use this for private documents.")
+                        .font(.system(size: 10))
+                        .foregroundColor(settingsStore.vtHashOnly ? Theme.verdictGreenFg : Theme.verdictRedFg)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .overlay(Divider(), alignment: .bottom)
+                }
                 if !settingsStore.vtEnabled && !settingsStore.pompelmiEnabled {
                     Text("No active scanners - every new file will be quarantined as inconclusive.")
                         .font(.system(size: 10))
@@ -69,34 +88,6 @@ struct SettingsTabView: View {
                         .padding(.vertical, 7)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .overlay(Divider(), alignment: .bottom)
-                }
-
-                SettingGroupHeader(title: "Sandbox")
-                SettingRow(label: "Enable") {
-                    AppSwitch(isOn: $sandboxCfg.cfg.enabled)
-                }
-                if sandboxCfg.cfg.enabled {
-                    SettingRow(label: "Idle timeout (min)", indent: 16) {
-                        Stepper(value: $sandboxCfg.cfg.idleTimeoutMinutes, in: 5...240, step: 5) {
-                            Text("\(sandboxCfg.cfg.idleTimeoutMinutes)")
-                                .font(.system(size: 11, design: .monospaced))
-                        }
-                    }
-                    SettingRow(label: "Network ON by default", indent: 16) {
-                        AppSwitch(isOn: $sandboxCfg.cfg.networkDefault)
-                    }
-                    SettingRow(label: "VM memory (MiB)", indent: 16) {
-                        Stepper(value: $sandboxCfg.cfg.vmMemoryMB, in: 1024...16384, step: 1024) {
-                            Text("\(sandboxCfg.cfg.vmMemoryMB)")
-                                .font(.system(size: 11, design: .monospaced))
-                        }
-                    }
-                    SettingRow(label: "vCPU count", indent: 16) {
-                        Stepper(value: $sandboxCfg.cfg.vmCpuCount, in: 1...8, step: 1) {
-                            Text("\(sandboxCfg.cfg.vmCpuCount)")
-                                .font(.system(size: 11, design: .monospaced))
-                        }
-                    }
                 }
 
                 SettingGroupHeader(title: "Advanced")
@@ -133,6 +124,12 @@ struct SettingsTabView: View {
                         .font(.system(size: 11, design: .monospaced))
                         .frame(width: 180)
                 }
+                SettingRow(label: "Secrets storage") {
+                    Text(settingsStore.secretsBackend == "keychain" ? "Keychain" : "config.json")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 180, alignment: .leading)
+                }
                 SettingRow(label: "Language") {
                     Picker("", selection: $localeRaw) {
                         ForEach(AppLocale.allCases) { loc in
@@ -165,20 +162,5 @@ struct SettingsTabView: View {
         saveTimer = Just(())
             .delay(for: .milliseconds(400), scheduler: DispatchQueue.main)
             .sink { _ in settingsStore.save() }
-    }
-}
-
-@MainActor
-final class SandboxConfigVM: ObservableObject {
-    @Published var cfg: SandboxConfig {
-        didSet { try? cfg.save(to: url) }
-    }
-    private let url: URL
-
-    init() {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("FileSandbox")
-        self.url = support.appendingPathComponent("sandbox-config.json")
-        self.cfg = (try? SandboxConfig.load(from: url)) ?? .init()
     }
 }

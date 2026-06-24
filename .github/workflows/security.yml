@@ -1,0 +1,43 @@
+name: security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly, so a freshly-published advisory is caught even without a push.
+    - cron: "0 7 * * 1"
+
+jobs:
+  supply-chain:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: daemon
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit and cargo-deny
+        run: cargo install cargo-audit cargo-deny --locked
+      - name: cargo audit (known CVEs)
+        run: cargo audit
+      - name: cargo deny — advisories, bans, sources (hard gate)
+        run: cargo deny check advisories bans sources
+      - name: cargo deny — licenses (informational)
+        continue-on-error: true
+        run: cargo deny check licenses
+
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: daemon
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: clippy (warnings as errors)
+        run: cargo clippy --all-targets -- -D warnings
+      - name: tests
+        run: cargo test

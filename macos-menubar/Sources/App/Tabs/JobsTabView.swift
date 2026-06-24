@@ -3,7 +3,6 @@ import AppKit
 
 struct JobsTabView: View {
     @ObservedObject var store: JobStore
-    @ObservedObject var sandboxStore: SandboxStore
     @ObservedObject var settingsStore: SettingsStore
 
     @AppStorage("filesandbox.jobs.collapsed.scanning")  private var scanningCollapsed = false
@@ -26,8 +25,7 @@ struct JobsTabView: View {
                         emptyMessage: "No active scans",
                         collapsed: $scanningCollapsed,
                         expandedJobId: $expandedJobId,
-                        store: store,
-                        sandboxStore: sandboxStore
+                        store: store
                     )
                     JobsGroup(
                         title: "Quarantine",
@@ -35,8 +33,7 @@ struct JobsTabView: View {
                         emptyMessage: "Nothing quarantined",
                         collapsed: $quarantineCollapsed,
                         expandedJobId: $expandedJobId,
-                        store: store,
-                        sandboxStore: sandboxStore
+                        store: store
                     )
                     if !store.restoredJobs.isEmpty {
                         JobsGroup(
@@ -45,8 +42,7 @@ struct JobsTabView: View {
                             emptyMessage: "",
                             collapsed: $restoredCollapsed,
                             expandedJobId: $expandedJobId,
-                            store: store,
-                            sandboxStore: sandboxStore
+                            store: store
                         )
                     }
                 }
@@ -104,7 +100,6 @@ private struct JobsGroup: View {
     @Binding var collapsed: Bool
     @Binding var expandedJobId: String?
     @ObservedObject var store: JobStore
-    @ObservedObject var sandboxStore: SandboxStore
 
     var body: some View {
         Button {
@@ -148,8 +143,7 @@ private struct JobsGroup: View {
                     JobRow(
                         job: job,
                         expandedJobId: $expandedJobId,
-                        store: store,
-                        sandboxStore: sandboxStore
+                        store: store
                     )
                 }
             }
@@ -161,7 +155,6 @@ private struct JobRow: View {
     let job: SandboxJob
     @Binding var expandedJobId: String?
     @ObservedObject var store: JobStore
-    @ObservedObject var sandboxStore: SandboxStore
 
     private var isExpanded: Bool { expandedJobId == job.id }
 
@@ -243,20 +236,6 @@ private struct JobRow: View {
             }
 
             HStack(spacing: 6) {
-                if job.status == "quarantine_kept" && sandboxStore.canOpen, let path = job.final_path {
-                    Button {
-                        sandboxStore.openSandbox(filePath: path)
-                    } label: {
-                        Label("Open in sandbox", systemImage: "shield.lefthalf.filled")
-                            .font(.system(size: 11, weight: .medium))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(Color(nsColor: .labelColor))
-                            .foregroundColor(Color(nsColor: .windowBackgroundColor))
-                            .clipShape(RoundedRectangle(cornerRadius: Theme.cornerRadiusButton))
-                    }
-                    .buttonStyle(.plain)
-                }
                 if job.status == "quarantine_kept" {
                     Button {
                         store.restoreFile(job.id)

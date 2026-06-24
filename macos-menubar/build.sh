@@ -73,20 +73,5 @@ codesign --force --sign - \
          "$APP"
 codesign --verify --verbose=2 "$APP"
 
-# ── Stage sandbox-base artifacts ─────────────────────────────────────────────
-SANDBOX_IMG_DIR="$(cd .. && pwd)/sandbox-image/build"
-SANDBOX_BASE_DIR="$HOME/Library/Application Support/FileSandbox/sandbox-base/current"
-if [ -f "$SANDBOX_IMG_DIR/base.img" ] && [ -f "$SANDBOX_IMG_DIR/SHA256SUMS" ]; then
-  echo "Staging sandbox base image to: $SANDBOX_BASE_DIR"
-  mkdir -p "$SANDBOX_BASE_DIR"
-  cp "$SANDBOX_IMG_DIR/base.img"    "$SANDBOX_BASE_DIR/"
-  cp "$SANDBOX_IMG_DIR/vmlinuz"     "$SANDBOX_BASE_DIR/"
-  cp "$SANDBOX_IMG_DIR/initrd.img"  "$SANDBOX_BASE_DIR/"
-  ( cd "$SANDBOX_BASE_DIR" && shasum -a 256 -c "$SANDBOX_IMG_DIR/SHA256SUMS" ) \
-    || { echo "WARNING: SHA-256 mismatch; sandbox will refuse to launch." >&2; }
-else
-  echo "Note: sandbox-image/build/base.img not found — run 'yarn sandbox:build' first to enable the sandbox feature."
-fi
-
 echo "Done: $(pwd)/$APP"
 echo "Run: open \"$(pwd)/$APP\""

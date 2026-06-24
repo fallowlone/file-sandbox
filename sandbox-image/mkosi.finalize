@@ -1,5 +1,0 @@
-#!/bin/sh
-# No-op for mkosi 14 — squashfs + kernel/initrd extraction is performed by
-# scripts/sandbox-build.sh after mkosi exits. (mkosi 14 invokes finalize
-# with the phase-name string, not a path, making in-script squashfs unsafe.)
-exit 0

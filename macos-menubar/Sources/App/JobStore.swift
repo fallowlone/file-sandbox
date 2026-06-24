@@ -49,10 +49,30 @@ struct JobsResponse: Codable {
 }
 
 enum ClientAuthStorage {
-    private static let key = "filesandboxClientAPIToken"
+    private static let account = "clientApiToken"
+    private static let legacyKey = "filesandboxClientAPIToken"
+
+    /// The bearer token sent to the daemon, stored in the Keychain. Reads
+    /// migrate any value left in `UserDefaults` by an older build, then erase it.
     static var token: String {
-        get { UserDefaults.standard.string(forKey: key) ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: key) }
+        get {
+            if let v = Keychain.read(account) { return v }
+            let legacy = UserDefaults.standard.string(forKey: legacyKey) ?? ""
+            if !legacy.isEmpty {
+                Keychain.write(account, legacy)
+                UserDefaults.standard.removeObject(forKey: legacyKey)
+                return legacy
+            }
+            return ""
+        }
+        set {
+            if newValue.isEmpty {
+                Keychain.delete(account)
+            } else {
+                Keychain.write(account, newValue)
+            }
+            UserDefaults.standard.removeObject(forKey: legacyKey)
+        }
     }
 }
 
@@ -108,18 +128,18 @@ class JobStore: ObservableObject {
     private func spawnDaemonProcess(projectPath: String, nodeBin: String) {
         let proc = Process()
         let logPath = "\(projectPath)/logs/daemon-ui.log"
-        let nodeCmd = nodeBin.isEmpty ? "node" : nodeBin
-        let shellCmd = "\(nodeCmd) src/index.ts >> \"\(logPath)\" 2>&1"
+        // `nodeBin` is retained for call-site compatibility but no longer used:
+        // the daemon is a self-contained Rust binary, not a Node entrypoint.
+        let binary = "\(projectPath)/daemon/target/release/file-sandbox-daemon"
+        let shellCmd = "exec \"\(binary)\" >> \"\(logPath)\" 2>&1"
 
-        // GUI apps get a stripped PATH — launch via login shell so nvm/Homebrew/etc are loaded
+        // Wrap in a login shell only to redirect stdout/stderr to the log file.
         proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
         proc.arguments = ["-l", "-c", shellCmd]
+        // Working dir holds config.json, which the binary reads on startup.
         proc.currentDirectoryURL = URL(fileURLWithPath: projectPath)
 
-        // Inherit environment so PATH/nvm etc. are available
-        var env = ProcessInfo.processInfo.environment
-        env["NODE_NO_WARNINGS"] = "1"
-        proc.environment = env
+        proc.environment = ProcessInfo.processInfo.environment
 
         // Ensure logs/ dir exists
         try? FileManager.default.createDirectory(

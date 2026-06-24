@@ -11,12 +11,13 @@ enum ScanStage: String, CaseIterable {
     case received
     case cacheCheck = "cache_check"
     case localScan  = "local_scan"
+    case vtLookup   = "vt_lookup"
     case vtUpload   = "vt_upload"
     case vtPoll     = "vt_poll"
     case done
     case error
 
-    static let pipeline: [ScanStage] = [.cacheCheck, .localScan, .vtUpload, .vtPoll, .done]
+    static let pipeline: [ScanStage] = [.cacheCheck, .localScan, .vtLookup, .vtUpload, .vtPoll, .done]
 
     /// Short label rendered inside `StagePill` and `StageBadge`.
     var label: String {
@@ -24,6 +25,7 @@ enum ScanStage: String, CaseIterable {
         case .received:   return "Received"
         case .cacheCheck: return "Cache"
         case .localScan:  return "Local"
+        case .vtLookup:   return "VT lookup"
         case .vtUpload:   return "VT upload"
         case .vtPoll:     return "VT poll"
         case .done:       return "Done"
@@ -37,6 +39,7 @@ enum ScanStage: String, CaseIterable {
         case .received:   return "tray.and.arrow.down"
         case .cacheCheck: return "magnifyingglass"
         case .localScan:  return "shield.lefthalf.filled"
+        case .vtLookup:   return "doc.text.magnifyingglass"
         case .vtUpload:   return "arrow.up.circle"
         case .vtPoll:     return "arrow.triangle.2.circlepath"
         case .done:       return "checkmark.shield.fill"
@@ -47,7 +50,7 @@ enum ScanStage: String, CaseIterable {
     /// Foreground tint for `StagePill` and for a `current`-state `StageBadge`.
     var tint: Color {
         switch self {
-        case .received, .cacheCheck, .vtUpload, .vtPoll: return Theme.verdictBlueFg
+        case .received, .cacheCheck, .vtLookup, .vtUpload, .vtPoll: return Theme.verdictBlueFg
         case .localScan:                                  return Theme.verdictOrangeFg
         case .done:                                       return Theme.verdictGreenFg
         case .error:                                      return Theme.verdictRedFg

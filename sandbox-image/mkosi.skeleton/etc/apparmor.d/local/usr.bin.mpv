@@ -1,3 +1,0 @@
-deny network,
-deny /proc/*/mem r,
-deny /sys/** w,
