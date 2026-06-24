@@ -83,14 +83,6 @@ async fn set_quarantine_xattr(path: &Path) {
     }
 }
 
-async fn clear_all_xattrs(path: &Path) {
-    let _ = tokio::process::Command::new("xattr")
-        .arg("-c")
-        .arg(path)
-        .status()
-        .await;
-}
-
 pub struct WatcherOptions {
     pub watch_recursive: bool,
     pub max_scan_bytes: u64,
@@ -293,7 +285,6 @@ impl Watcher {
         if *inner.mode.lock().unwrap() == WatcherMode::MonitoringDisabled {
             return;
         }
-        let is_create = matches!(event.kind, EventKind::Create(_));
         let is_change = matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_));
         let is_remove = matches!(event.kind, EventKind::Remove(_));
 
@@ -309,19 +300,35 @@ impl Watcher {
                 pending.remove(&path);
                 continue;
             }
-            // Skip directories.
-            let meta = match tokio::fs::metadata(&path).await {
+            // Reject symlinks and directories. `symlink_metadata` does NOT follow
+            // the link, so a symlink dropped into the watch folder is detected and
+            // skipped — we must never chmod, copy, or scan the file it points at
+            // (that would let an attacker lock down or exfiltrate an arbitrary file
+            // such as ~/.ssh/id_ed25519 simply by naming a symlink after it).
+            let meta = match tokio::fs::symlink_metadata(&path).await {
                 Ok(m) => m,
                 Err(_) => continue,
             };
+            if meta.file_type().is_symlink() {
+                eprintln!(
+                    "[watcher] ignoring symlink (will not lock or scan its target): {}",
+                    path.display()
+                );
+                continue;
+            }
             if meta.is_dir() {
                 continue;
             }
             let skip_lock = inner.restoring_paths.lock().unwrap().contains(&path)
                 || inner.processing_paths.lock().unwrap().contains(&path);
 
-            if is_create && !skip_lock {
-                // Lock the file before it stabilizes (mirrors the TS rawFsWatcher).
+            // Lock on the FIRST event of any kind for this path (Create OR a
+            // rename-in Modify), not only Create. The atomic write-temp-then-rename
+            // pattern used by browsers/editors surfaces as Modify; gating on Create
+            // alone left such files readable/executable until the ~2s stability
+            // timer fired. `pending` membership marks an already-seen path so a
+            // re-modify never re-chmods.
+            if is_change && !skip_lock && !pending.contains_key(&path) {
                 chmod(&path, 0o000).await;
                 set_quarantine_xattr(&path).await;
             }
@@ -372,7 +379,10 @@ impl Watcher {
         if inner.ignored.contains(&fname) {
             return;
         }
-        match tokio::fs::metadata(&filepath).await {
+        // Re-check at handle time: a symlink (or a dir) must never enter the
+        // quarantine/scan pipeline, even if one was swapped in after the event.
+        match tokio::fs::symlink_metadata(&filepath).await {
+            Ok(m) if m.file_type().is_symlink() => return,
             Ok(m) if m.is_dir() => return,
             Err(_) => return,
             Ok(_) => {}
@@ -615,13 +625,13 @@ impl Watcher {
             .mover
             .resolve_restore_destination(&inner.watch_path, original)
             .await;
-        inner.restoring_paths.lock().unwrap().insert(dest);
+        inner.restoring_paths.lock().unwrap().insert(dest.clone());
+        // Restore to the exact path we marked so the watcher skips its own write.
+        // restore_to_path normalizes mode (0o644) + clears the quarantine xattr.
         let restored = inner
             .mover
-            .restore_to_watch(&inner.watch_path, quarantine, original)
+            .restore_to_path(&inner.watch_path, quarantine, dest)
             .await?;
-        chmod(&restored, 0o644).await;
-        clear_all_xattrs(&restored).await;
         inner
             .job_store
             .set_restored(job_id, &restored.to_string_lossy())?;

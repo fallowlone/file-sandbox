@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Result};
 use axum::{
-    extract::{Path, Request, State},
+    extract::{Path, Query, Request, State},
     http::{header, StatusCode},
     middleware::{self, Next},
     response::{Html, IntoResponse, Redirect, Response},
@@ -71,14 +71,36 @@ impl AppState {
         Ok(())
     }
 
-    /// Port of `index.ts restoreQuarantineJob`.
-    async fn restore_quarantine_job(&self, id: &str) -> Result<()> {
+    /// Port of `index.ts restoreQuarantineJob`. `force` bypasses the clean-verdict
+    /// gate for the explicit "I accept the risk" path; the default UI never sets it.
+    async fn restore_quarantine_job(&self, id: &str, force: bool) -> Result<()> {
         let job = self
             .store
             .get_job(id)?
             .ok_or_else(|| anyhow!("Job {id} not found"))?;
         if job.status != "quarantine_kept" {
             bail!("Job {id} is not in quarantine_kept status");
+        }
+        // Gate on the verdict, not just the status: `quarantine_kept` covers
+        // infected, oversized, and inconclusive alike. A file flagged by a scanner
+        // must never be silently copied back into the watch folder — that would
+        // defeat the tool's containment purpose. Only an explicitly clean verdict
+        // (local clamd OR VirusTotal) may be restored without `force`.
+        let vt_clean = job.vt_verdict.as_deref() == Some("clean");
+        let local_clean = job.pompelmi_verdict.as_deref() == Some("clean");
+        if !force && !vt_clean && !local_clean {
+            bail!(
+                "Refusing to restore {id}: not verified clean (vt={}, local={}). Delete it, or force-restore to accept the risk.",
+                job.vt_verdict.as_deref().unwrap_or("none"),
+                job.pompelmi_verdict.as_deref().unwrap_or("none")
+            );
+        }
+        if force && !vt_clean && !local_clean {
+            eprintln!(
+                "[restore] FORCE-restoring non-clean job {id} (vt={}, local={}) by explicit request",
+                job.vt_verdict.as_deref().unwrap_or("none"),
+                job.pompelmi_verdict.as_deref().unwrap_or("none")
+            );
         }
         let q = job
             .quarantine_path
@@ -88,10 +110,10 @@ impl AppState {
             .file_mover
             .resolve_restore_destination(watch, &job.original_name)
             .await;
-        self.watcher.mark_restoring(dest);
+        self.watcher.mark_restoring(dest.clone());
         let restored = self
             .file_mover
-            .restore_to_watch(watch, FsPath::new(&q), &job.original_name)
+            .restore_to_path(watch, FsPath::new(&q), dest)
             .await?;
         self.store.set_restored(id, &restored.to_string_lossy())?;
         Ok(())
@@ -254,8 +276,16 @@ async fn cancel(State(st): State<Arc<AppState>>, Path(id): Path<String>) -> Resp
     Json(json!({ "ok": true })).into_response()
 }
 
-async fn restore(State(st): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
-    match st.restore_quarantine_job(&id).await {
+async fn restore(
+    State(st): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let force = params
+        .get("force")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
+    match st.restore_quarantine_job(&id, force).await {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(e) => (
             StatusCode::BAD_REQUEST,
@@ -535,6 +565,7 @@ const DASHBOARD_HTML: &str = r##"<!DOCTYPE html>
     a { color: #8cb4ff; }
     .oversized { color: #ffb347; font-weight: 600; }
     .refresh-status { color: #666; font-size: 12px; margin-left: 0.5rem; }
+    button.danger { background: #5a1d1d; color: #ffd7d7; border: 1px solid #a33; }
   </style>
 </head>
 <body>
@@ -583,10 +614,19 @@ const DASHBOARD_HTML: &str = r##"<!DOCTYPE html>
 
       const acts = document.createElement('td');
       if (j.status === 'quarantine_kept') {
+        const clean = j.vt_verdict === 'clean' || j.pompelmi_verdict === 'clean';
         const r = document.createElement('button');
         r.type = 'button';
-        r.textContent = 'Restore';
-        r.addEventListener('click', () => restoreFile(j.id));
+        if (clean) {
+          r.textContent = 'Restore';
+          r.addEventListener('click', () => restoreFile(j.id, false));
+        } else {
+          // Not verified clean (infected / inconclusive / oversized). Restoring is
+          // an explicit accept-the-risk action, visually distinct and double-gated.
+          r.textContent = 'Force restore';
+          r.className = 'danger';
+          r.addEventListener('click', () => restoreFile(j.id, true));
+        }
         acts.appendChild(r);
         acts.appendChild(document.createTextNode(' '));
         const d = document.createElement('button');
@@ -636,9 +676,13 @@ const DASHBOARD_HTML: &str = r##"<!DOCTYPE html>
       else alert('Error: ' + data.error);
     }
 
-    async function restoreFile(id) {
-      if (!confirm('Restore this file to the watch folder?')) return;
-      const res = await fetch('/api/jobs/' + id + '/restore', { method: 'POST' });
+    async function restoreFile(id, force) {
+      const msg = force
+        ? 'This file was NOT verified clean (it may be infected or was never fully scanned). Force-restore it to the watch folder anyway?'
+        : 'Restore this file to the watch folder?';
+      if (!confirm(msg)) return;
+      const url = '/api/jobs/' + id + '/restore' + (force ? '?force=true' : '');
+      const res = await fetch(url, { method: 'POST' });
       const data = await res.json();
       if (data.ok) refresh();
       else alert('Error: ' + data.error);
@@ -798,6 +842,32 @@ mod tests {
         route_secrets_to_store(&store, &mut updates).unwrap();
         assert_eq!(store.get(ACCOUNT_API_TOKEN).unwrap(), None);
         assert!(updates.api_token.is_none());
+    }
+
+    #[tokio::test]
+    async fn restore_refuses_non_clean_without_force() {
+        let st = test_state(None);
+        st.store
+            .insert_received("j", "/src/evil.bin", "evil.bin")
+            .unwrap();
+        st.store
+            .set_in_quarantine("j", "/tmp/q/uuid_evil.bin")
+            .unwrap();
+        st.store
+            .set_scan_result(
+                "j",
+                &crate::job_store::ScanResult {
+                    verdict: "infected".into(),
+                    message: "EICAR".into(),
+                },
+            )
+            .unwrap();
+        // status is now quarantine_kept with an infected verdict.
+        let err = st.restore_quarantine_job("j", false).await.unwrap_err();
+        assert!(
+            err.to_string().contains("not verified clean"),
+            "expected clean-gate refusal, got: {err}"
+        );
     }
 
     #[tokio::test]
