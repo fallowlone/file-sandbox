@@ -68,6 +68,7 @@ pub struct RawConfig {
     pub pompelmi_failure_mode: Option<String>,
     pub watcher_mode: Option<String>,
     pub vt_enabled: Option<bool>,
+    pub vt_hash_only: Option<bool>,
     pub secrets_backend: Option<String>,
 }
 
@@ -91,6 +92,9 @@ pub struct Config {
     pub pompelmi_failure_mode: FailureMode,
     pub watcher_mode: WatcherMode,
     pub vt_enabled: bool,
+    /// When true (default), a file unknown to VirusTotal is looked up by SHA-256
+    /// only and never uploaded — its content never leaves the machine.
+    pub vt_hash_only: bool,
     pub config_encrypted_at_rest: bool,
     pub secrets_backend: SecretsBackend,
 }
@@ -239,6 +243,9 @@ pub fn resolve(file: RawConfig, env: &impl Fn(&str) -> Option<String>) -> Result
         vt_enabled: file
             .vt_enabled
             .unwrap_or_else(|| env_bool(env, "VT_ENABLED", true)),
+        vt_hash_only: file
+            .vt_hash_only
+            .unwrap_or_else(|| env_bool(env, "VT_HASH_ONLY", true)),
         config_encrypted_at_rest: master_key_from_env(env).is_some(),
         secrets_backend: SecretsBackend::from_str(
             &file
@@ -387,6 +394,9 @@ fn merge_raw(current: &mut RawConfig, updates: RawConfig) {
     if updates.vt_enabled.is_some() {
         current.vt_enabled = updates.vt_enabled;
     }
+    if updates.vt_hash_only.is_some() {
+        current.vt_hash_only = updates.vt_hash_only;
+    }
     if updates.secrets_backend.is_some() {
         current.secrets_backend = updates.secrets_backend;
     }
@@ -527,6 +537,7 @@ mod tests {
         assert_eq!(cfg.pompelmi_failure_mode, FailureMode::Bypass);
         assert_eq!(cfg.watcher_mode, WatcherMode::Active);
         assert!(cfg.vt_enabled);
+        assert!(cfg.vt_hash_only, "hash-only (privacy) is the default");
         assert!(cfg.pompelmi_enabled);
         assert!(!cfg.config_encrypted_at_rest);
     }

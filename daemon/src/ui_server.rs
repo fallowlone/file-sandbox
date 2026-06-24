@@ -287,6 +287,7 @@ async fn get_config(State(st): State<Arc<AppState>>) -> Response {
         "maxConcurrentScans": c.max_concurrent_scans,
         "useSeparateVtProcess": c.use_separate_vt_process,
         "inconclusiveRetentionDays": c.inconclusive_retention_days,
+        "vtHashOnly": c.vt_hash_only,
         "configEncryptedAtRest": c.config_encrypted_at_rest,
         "secretsBackend": c.secrets_backend.as_str(),
     }))
@@ -397,6 +398,9 @@ async fn post_config(State(st): State<Arc<AppState>>, Json(body): Json<Value>) -
     }
     if let Some(b) = as_bool("useSeparateVtProcess") {
         updates.use_separate_vt_process = Some(b);
+    }
+    if let Some(b) = as_bool("vtHashOnly") {
+        updates.vt_hash_only = Some(b);
     }
     if let Some(n) = as_int("inconclusiveRetentionDays").filter(|&n| n >= 0) {
         updates.inconclusive_retention_days = Some(n as u32);

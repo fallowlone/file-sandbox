@@ -81,6 +81,7 @@ async fn main() -> Result<()> {
             pompelmi_failure_mode: cfg.pompelmi_failure_mode,
             initial_mode: cfg.watcher_mode,
             vt_enabled: cfg.vt_enabled,
+            vt_hash_only: cfg.vt_hash_only,
             on_mode_change: Some(Box::new(|m: WatcherMode| {
                 let updates = RawConfig {
                     watcher_mode: Some(m.as_str().to_string()),

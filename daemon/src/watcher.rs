@@ -100,6 +100,7 @@ pub struct WatcherOptions {
     pub pompelmi_failure_mode: FailureMode,
     pub initial_mode: WatcherMode,
     pub vt_enabled: bool,
+    pub vt_hash_only: bool,
     pub on_mode_change: Option<Box<dyn Fn(WatcherMode) + Send + Sync>>,
 }
 
@@ -114,6 +115,7 @@ impl Default for WatcherOptions {
             pompelmi_failure_mode: FailureMode::Bypass,
             initial_mode: WatcherMode::Active,
             vt_enabled: true,
+            vt_hash_only: true,
             on_mode_change: None,
         }
     }
@@ -164,6 +166,7 @@ impl Watcher {
             api_key,
             Some(opts.max_scan_bytes),
             opts.use_separate_vt_process,
+            opts.vt_hash_only,
         );
         Self(Arc::new(WatcherInner {
             watch_path: watch_path.into(),
@@ -565,6 +568,7 @@ impl Watcher {
         let result = {
             let on_stage = |stage: VtStage| {
                 let s = match stage {
+                    VtStage::HashLookup => "vt_lookup",
                     VtStage::Upload => "vt_upload",
                     VtStage::Poll => "vt_poll",
                 };

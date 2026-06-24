@@ -1,7 +1,12 @@
-//! Port of `src/virus-checker.ts`.
+//! Port of `src/virus-checker.ts`, hardened for privacy.
 //!
-//! Uploads a file to VirusTotal and polls the analysis until it settles,
-//! returning a `clean | infected | inconclusive | oversized` verdict.
+//! Privacy-preserving VirusTotal client. A file is first looked up by its
+//! SHA-256 (`GET /files/{sha256}`), a request that discloses only the hash and
+//! never the file content. A file VirusTotal already knows is scored from that
+//! lookup with **zero bytes leaving the machine**. Content is uploaded
+//! (`POST /files`) only when the file is unknown to VirusTotal *and* the
+//! operator has explicitly opted out of hash-only mode (`hash_only = false`).
+//! The default (`hash_only = true`) NEVER uploads file content.
 //!
 //! Differences from the TS version, by design:
 //!   * `useSeparateVtProcess` is a no-op. The TS daemon forked a child Node
@@ -16,6 +21,8 @@ use std::time::Duration;
 
 use reqwest::Client;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
+use tokio::io::AsyncReadExt;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
@@ -25,6 +32,11 @@ const DEFAULT_MAX_BYTES: u64 = 400 * 1024 * 1024;
 /// VT's standard `/files` endpoint rejects uploads larger than 32 MiB with HTTP
 /// 413. Files above this size use the `/files/upload_url` large-file flow.
 const LARGE_FILE_THRESHOLD: u64 = 32 * 1024 * 1024;
+/// Streaming-hash read buffer — bounds memory for the default (hash-only) path
+/// so a large file is never slurped whole into RAM just to be fingerprinted.
+const HASH_CHUNK: usize = 64 * 1024;
+const CONNECT_TIMEOUT_SECS: u64 = 15;
+const REQUEST_TIMEOUT_SECS: u64 = 300;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VirusVerdict {
@@ -106,6 +118,26 @@ struct VtAnalysisAttributes {
     stats: VtStats,
 }
 
+/// Response of `GET /files/{sha256}` — the existing file report VT holds for a
+/// hash. Reading `last_analysis_stats` lets us score a known file without ever
+/// uploading its bytes.
+#[derive(Deserialize)]
+struct VtFileResponse {
+    data: Option<VtFileData>,
+    error: Option<VtError>,
+}
+
+#[derive(Deserialize)]
+struct VtFileData {
+    attributes: VtFileAttributes,
+}
+
+#[derive(Deserialize)]
+struct VtFileAttributes {
+    #[serde(default)]
+    last_analysis_stats: VtStats,
+}
+
 #[derive(Deserialize, Default)]
 struct VtStats {
     #[serde(default)]
@@ -122,6 +154,8 @@ struct VtStats {
 /// updated (mirrors the TS `onStage` callback values).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VtStage {
+    /// Privacy-preserving hash lookup (`GET /files/{sha256}`), no content sent.
+    HashLookup,
     Upload,
     Poll,
 }
@@ -135,6 +169,15 @@ pub fn verdict_from_stats(
     undetected: u64,
 ) -> VirusCheckResult {
     let total = malicious + suspicious + harmless + undetected;
+    // Zero-coverage guard: VT can report "completed" with every stat at 0 when
+    // no engine actually produced a verdict (e.g. a brand-new or unsupported
+    // sample). Treating that as Clean would auto-restore an unscanned file and
+    // poison the SHA-256 cache, so it must be Inconclusive — keep it quarantined.
+    if total == 0 {
+        return VirusCheckResult::inconclusive(
+            "VirusTotal returned no engine verdicts (0 engines); kept in quarantine",
+        );
+    }
     if malicious > 0 || suspicious > 0 {
         VirusCheckResult {
             verdict: VirusVerdict::Infected,
@@ -160,6 +203,100 @@ fn should_retry_upload() -> bool {
 /// Whether a file of `len` bytes must use VT's large-file upload flow.
 fn use_upload_url(len: u64) -> bool {
     len > LARGE_FILE_THRESHOLD
+}
+
+/// Shared HTTPS client with bounded connect/request timeouts so a hung VT
+/// endpoint can never stall a scan worker indefinitely. `https_only` guarantees
+/// no request (including the one-time large-file `upload_url`) is ever made over
+/// cleartext.
+fn build_client() -> Client {
+    Client::builder()
+        .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
+        .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+        .https_only(true)
+        .build()
+        .unwrap_or_else(|_| Client::new())
+}
+
+/// Stream the file from disk in fixed-size chunks and return its lowercase hex
+/// SHA-256. Memory is bounded to `HASH_CHUNK`, so even a multi-GB file is
+/// fingerprinted without being read whole into RAM.
+async fn sha256_file(path: &Path) -> std::io::Result<String> {
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; HASH_CHUNK];
+    loop {
+        let n = file.read(&mut buf).await?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+/// Outcome of a privacy-preserving hash lookup.
+enum HashLookup {
+    /// VT already has a report for this hash — scored without any upload.
+    Known(VirusCheckResult),
+    /// VT has never seen this content (HTTP 404).
+    Unknown,
+    /// Transient failure (network/quota/parse). Caller decides whether to fall
+    /// back to upload (only in non-hash-only mode) or stay inconclusive.
+    Failed(String),
+    Cancelled,
+}
+
+/// Look a file up by SHA-256 without uploading its content.
+async fn lookup_by_hash(
+    client: &Client,
+    api_key: &str,
+    sha256: &str,
+    cancel: Option<&CancellationToken>,
+) -> HashLookup {
+    let send = client
+        .get(format!("{API_URL}/files/{sha256}"))
+        .header("x-apikey", api_key)
+        .send();
+
+    match cancellable(send, cancel).await {
+        None => HashLookup::Cancelled,
+        Some(Err(e)) => HashLookup::Failed(format!("hash lookup network error: {e}")),
+        Some(Ok(r)) => {
+            let status = r.status().as_u16();
+            if status == 404 {
+                return HashLookup::Unknown;
+            }
+            if !r.status().is_success() {
+                let body = r.text().await.unwrap_or_default();
+                let snippet: String = body.chars().take(300).collect();
+                return HashLookup::Failed(format!("hash lookup HTTP {status}: {snippet}"));
+            }
+            match r.json::<VtFileResponse>().await {
+                Ok(j) => {
+                    if let Some(err) = j.error {
+                        return HashLookup::Failed(format!(
+                            "hash lookup API error: {}",
+                            err.message.unwrap_or_else(|| "unknown".into())
+                        ));
+                    }
+                    match j.data {
+                        Some(d) => {
+                            let s = d.attributes.last_analysis_stats;
+                            HashLookup::Known(verdict_from_stats(
+                                s.malicious,
+                                s.suspicious,
+                                s.harmless,
+                                s.undetected,
+                            ))
+                        }
+                        None => HashLookup::Failed("hash lookup response had no data".into()),
+                    }
+                }
+                Err(_) => HashLookup::Failed("invalid JSON in hash lookup response".into()),
+            }
+        }
+    }
 }
 
 /// Fetch a one-time upload URL for files larger than 32 MiB.
@@ -211,12 +348,15 @@ fn env_u64(key: &str, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
-/// Core VT scan. Respects `max_bytes` before reading the whole file into RAM.
+/// Core VT scan. Respects `max_bytes` before touching the file. When
+/// `hash_only` is true (the privacy-preserving default) a file unknown to VT is
+/// returned `Inconclusive` and its bytes are never uploaded.
 pub async fn virus_check_file(
     api_key: &str,
     path: &Path,
     cancel: Option<&CancellationToken>,
     max_bytes: u64,
+    hash_only: bool,
     mut on_stage: impl FnMut(VtStage),
 ) -> VirusCheckResult {
     // Size guard.
@@ -235,12 +375,43 @@ pub async fn virus_check_file(
         Err(_) => return VirusCheckResult::inconclusive("Failed to stat file before scan"),
     }
 
+    let client = build_client();
+
+    // ── Privacy-preserving hash lookup (no content leaves the machine) ──────
+    on_stage(VtStage::HashLookup);
+    let sha256 = match sha256_file(path).await {
+        Ok(s) => s,
+        Err(_) => return VirusCheckResult::inconclusive("Failed to hash file before scan"),
+    };
+
+    match lookup_by_hash(&client, api_key, &sha256, cancel).await {
+        HashLookup::Cancelled => return VirusCheckResult::inconclusive("Cancelled by user"),
+        HashLookup::Known(result) => return result, // scored without uploading any bytes
+        HashLookup::Unknown => {
+            if hash_only {
+                return VirusCheckResult::inconclusive(
+                    "File is unknown to VirusTotal. Not uploaded (hash-only mode keeps file content private); kept in quarantine.",
+                );
+            }
+            // Upload mode: VT has never seen this content → fall through to upload.
+        }
+        HashLookup::Failed(msg) => {
+            if hash_only {
+                return VirusCheckResult::inconclusive(format!(
+                    "VirusTotal hash lookup failed; file not uploaded (hash-only mode): {msg}"
+                ));
+            }
+            eprintln!("[vt] hash lookup failed, falling back to upload (upload mode): {msg}");
+            // Upload mode: fall through to upload.
+        }
+    }
+
+    // ── Content upload path (reached only when hash_only == false) ──────────
     let file = match tokio::fs::read(path).await {
         Ok(bytes) => bytes,
         Err(_) => return VirusCheckResult::inconclusive("Failed to read file for upload"),
     };
 
-    let client = Client::new();
     let mut last_failure: Option<VirusCheckResult> = None;
     let mut analysis_id: Option<String> = None;
     let large = use_upload_url(file.len() as u64);
@@ -424,6 +595,8 @@ pub struct VirusChecker {
     /// Accepted for config parity; the Rust port always scans in-process.
     #[allow(dead_code)]
     use_separate_vt_process: bool,
+    /// When true (default), a file unknown to VirusTotal is never uploaded.
+    hash_only: bool,
 }
 
 impl VirusChecker {
@@ -431,11 +604,13 @@ impl VirusChecker {
         api_key: impl Into<String>,
         max_scan_bytes: Option<u64>,
         use_separate_vt_process: bool,
+        hash_only: bool,
     ) -> Self {
         Self {
             api_key: api_key.into(),
             max_scan_bytes: max_scan_bytes.unwrap_or(DEFAULT_MAX_BYTES),
             use_separate_vt_process,
+            hash_only,
         }
     }
 
@@ -445,7 +620,15 @@ impl VirusChecker {
         cancel: Option<&CancellationToken>,
         on_stage: impl FnMut(VtStage),
     ) -> VirusCheckResult {
-        virus_check_file(&self.api_key, path, cancel, self.max_scan_bytes, on_stage).await
+        virus_check_file(
+            &self.api_key,
+            path,
+            cancel,
+            self.max_scan_bytes,
+            self.hash_only,
+            on_stage,
+        )
+        .await
     }
 }
 
@@ -472,6 +655,15 @@ mod tests {
     }
 
     #[test]
+    fn verdict_from_stats_zero_coverage_is_inconclusive() {
+        // VT "completed" with every engine stat at 0 → not provably clean.
+        let r = verdict_from_stats(0, 0, 0, 0);
+        assert_eq!(r.verdict, VirusVerdict::Inconclusive);
+        assert_eq!(r.malicious, None);
+        assert!(r.message.contains("no engine verdicts"));
+    }
+
+    #[test]
     fn use_upload_url_switches_at_32_mib() {
         assert!(!use_upload_url(0));
         assert!(!use_upload_url(32 * 1024 * 1024)); // exactly 32 MiB → standard endpoint
@@ -480,12 +672,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sha256_file_matches_known_digest() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.bin");
+        tokio::fs::write(&file, b"abc").await.unwrap();
+        // SHA-256("abc")
+        assert_eq!(
+            sha256_file(&file).await.unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[tokio::test]
     async fn oversized_file_short_circuits_before_upload() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("big.bin");
         tokio::fs::write(&file, vec![0u8; 1024]).await.unwrap();
 
-        let res = virus_check_file("fake-key", &file, None, 100, |_| {}).await;
+        let res = virus_check_file("fake-key", &file, None, 100, true, |_| {}).await;
         assert_eq!(res.verdict, VirusVerdict::Oversized);
         assert!(res.message.contains("exceeds scan limit"));
     }
@@ -497,6 +701,7 @@ mod tests {
             Path::new("/no/such/file/abc"),
             None,
             1000,
+            true,
             |_| {},
         )
         .await;
@@ -513,7 +718,8 @@ mod tests {
         let token = CancellationToken::new();
         token.cancel(); // already cancelled before any network call
 
-        let res = virus_check_file("fake-key", &file, Some(&token), 1_000_000, |_| {}).await;
+        let res =
+            virus_check_file("fake-key", &file, Some(&token), 1_000_000, true, |_| {}).await;
         assert_eq!(res.verdict, VirusVerdict::Inconclusive);
         assert_eq!(res.message, "Cancelled by user");
     }
