@@ -32,12 +32,21 @@ enum Keychain {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        let update: [String: Any] = [kSecValueData as String: data]
+        // Pin the secret to this device: WhenUnlockedThisDeviceOnly keeps it out
+        // of iCloud Keychain sync and unencrypted backups, and the item is never
+        // marked synchronizable. The daemon's API token / VT key must not leave
+        // the machine it authenticates a local-only service on.
+        let update: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+        ]
         let status = SecItemUpdate(match as CFDictionary, update as CFDictionary)
         if status == errSecSuccess { return true }
         if status == errSecItemNotFound {
             var add = match
             add[kSecValueData as String] = data
+            add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+            add[kSecAttrSynchronizable as String] = false
             return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
         }
         return false

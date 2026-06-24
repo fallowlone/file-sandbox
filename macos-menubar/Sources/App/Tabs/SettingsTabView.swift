@@ -60,6 +60,26 @@ struct SettingsTabView: View {
                 SettingRow(label: "VirusTotal") {
                     AppSwitch(isOn: bind($settingsStore.vtEnabled))
                 }
+                if settingsStore.vtEnabled {
+                    SettingRow(label: "VT mode", indent: 16) {
+                        Picker("", selection: bind($settingsStore.vtHashOnly)) {
+                            Text("Hash-only (private)").tag(true)
+                            Text("Upload content").tag(false)
+                        }
+                        .pickerStyle(.menu)
+                        .frame(width: 220)
+                        .labelsHidden()
+                    }
+                    Text(settingsStore.vtHashOnly
+                        ? "Hash-only: sends just the file's SHA-256 to VirusTotal. File content never leaves your Mac. A file VirusTotal has never seen stays quarantined as inconclusive."
+                        : "Upload: sends the FULL file content to virustotal.com for any file it hasn't seen before. VirusTotal retains uploaded samples and shares them with its subscribers — do NOT use this for private documents.")
+                        .font(.system(size: 10))
+                        .foregroundColor(settingsStore.vtHashOnly ? Theme.verdictGreenFg : Theme.verdictRedFg)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .overlay(Divider(), alignment: .bottom)
+                }
                 if !settingsStore.vtEnabled && !settingsStore.pompelmiEnabled {
                     Text("No active scanners - every new file will be quarantined as inconclusive.")
                         .font(.system(size: 10))

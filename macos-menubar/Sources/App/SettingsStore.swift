@@ -19,6 +19,7 @@ struct DaemonConfig: Codable {
     var secretsBackend: String?
     var watcherMode: String?
     var vtEnabled: Bool?
+    var vtHashOnly: Bool?
     var pompelmiEnabled: Bool?
     var pompelmiSocketPath: String?
     var pompelmiFailureMode: String?
@@ -55,6 +56,9 @@ class SettingsStore: ObservableObject {
     @Published var inconclusiveRetentionDays: Int = 0
     @Published var watcherMode: WatcherMode = .active
     @Published var vtEnabled: Bool = true
+    /// When true (default), VirusTotal is queried by file hash only — file
+    /// content is never uploaded. See the daemon's `vt_hash_only`.
+    @Published var vtHashOnly: Bool = true
     @Published var pompelmiEnabled: Bool = true
     @Published var pompelmiSocketPath: String = "/tmp/clamd.sock"
     @Published var pompelmiFailureMode: String = "bypass"
@@ -133,6 +137,7 @@ class SettingsStore: ObservableObject {
                 self.inconclusiveRetentionDays = decoded.inconclusiveRetentionDays ?? 0
                 self.watcherMode = WatcherMode(rawValue: decoded.watcherMode ?? "active") ?? .active
                 self.vtEnabled = decoded.vtEnabled ?? true
+                self.vtHashOnly = decoded.vtHashOnly ?? true
                 self.pompelmiEnabled = decoded.pompelmiEnabled ?? true
                 self.pompelmiSocketPath = decoded.pompelmiSocketPath ?? "/tmp/clamd.sock"
                 self.pompelmiFailureMode = decoded.pompelmiFailureMode ?? "bypass"
@@ -164,6 +169,7 @@ class SettingsStore: ObservableObject {
             "inconclusiveRetentionDays": inconclusiveRetentionDays,
             "watcherMode": watcherMode.rawValue,
             "vtEnabled": vtEnabled,
+            "vtHashOnly": vtHashOnly,
             "pompelmiEnabled": pompelmiEnabled,
             "pompelmiSocketPath": pompelmiSocketPath,
             "pompelmiFailureMode": pompelmiFailureMode,
