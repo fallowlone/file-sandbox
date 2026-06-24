@@ -131,6 +131,13 @@ async fn main() -> Result<()> {
             eprintln!("{msg}");
             std::process::exit(1);
         }
+        if cfg.api_token.trim().is_empty() {
+            eprintln!(
+                "[SECURITY] HTTP API on {bind_host}:{port} has NO api_token set — any local process \
+                 can call it (browser DNS-rebinding/CSRF is blocked by the Host guard). Set apiToken \
+                 or FILESANDBOX_API_TOKEN to require authentication from local clients."
+            );
+        }
         let state = app_state.clone();
         tokio::spawn(async move {
             if let Err(e) = ui_server::serve(state, &bind_host, port).await {

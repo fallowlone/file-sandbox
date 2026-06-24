@@ -10,13 +10,14 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, bail, Result};
 use axum::{
     extract::{Path, Query, Request, State},
-    http::{header, StatusCode},
+    http::{header, Method, StatusCode},
     middleware::{self, Next},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{delete, get, post},
     Json, Router,
 };
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 use crate::config::{self, mask_secret, Config, RawConfig};
 use crate::file_mover::FileMover;
@@ -477,9 +478,12 @@ async fn root() -> Html<&'static str> {
 }
 
 fn server_error(msg: String) -> Response {
+    // Log the detailed error (may contain absolute paths / OS detail) server-side
+    // only; return a generic message to the client.
+    eprintln!("[http] 500: {msg}");
     (
         StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({ "error": msg })),
+        Json(json!({ "error": "Internal server error" })),
     )
         .into_response()
 }
@@ -488,9 +492,93 @@ fn bad_request(msg: String) -> Response {
     (StatusCode::BAD_REQUEST, Json(json!({ "error": msg }))).into_response()
 }
 
-// ── auth ──────────────────────────────────────────────────────────────────
+// ── auth & request guards ───────────────────────────────────────────────────
+
+/// Strip the `:port` (and IPv6 brackets) from a `Host`/authority value.
+fn strip_port(host: &str) -> &str {
+    if let Some(rest) = host.strip_prefix('[') {
+        // IPv6 literal: "[::1]:port" → "::1"
+        return rest.split(']').next().unwrap_or(rest);
+    }
+    match host.rsplit_once(':') {
+        Some((h, p)) if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => h,
+        _ => host,
+    }
+}
+
+/// Whether a request's `Host` header is acceptable for the current bind. This is
+/// the primary defense against DNS-rebinding: a page served from an attacker
+/// domain that rebinds to 127.0.0.1 still carries the attacker's hostname in
+/// `Host`, which is rejected here. Wildcard binds (`0.0.0.0` / `::`) are an
+/// explicit LAN opt-in, so the operator owns Host validation there.
+fn host_is_allowed(host_header: Option<&str>, bind_host: &str) -> bool {
+    if bind_host == "0.0.0.0" || bind_host == "::" {
+        return true;
+    }
+    let host = match host_header {
+        Some(h) => h,
+        // A browser — the DNS-rebinding/CSRF vector — always sends Host, so a
+        // missing one means a non-browser client (curl, the menu bar) that already
+        // needs same-host/loopback access; allow it rather than break those tools.
+        None => return true,
+    };
+    let hostname = strip_port(host);
+    const LOOPBACK: [&str; 3] = ["127.0.0.1", "localhost", "::1"];
+    LOOPBACK.contains(&hostname) || hostname == bind_host
+}
+
+/// Whether a cross-origin `Origin` header is acceptable. Same rule as the Host
+/// guard applied to the Origin's authority. A missing Origin (non-browser
+/// clients such as the menu bar app) is treated as allowed by the caller.
+fn origin_is_allowed(origin: &str, bind_host: &str) -> bool {
+    let after_scheme = origin.split("://").nth(1).unwrap_or(origin);
+    let authority = after_scheme.split('/').next().unwrap_or(after_scheme);
+    host_is_allowed(Some(authority), bind_host)
+}
+
+/// Constant-time token comparison over fixed-length SHA-256 digests — no early
+/// exit and no length leak, closing the timing side-channel of `==`.
+fn ct_eq(a: &str, b: &str) -> bool {
+    let ha = Sha256::digest(a.as_bytes());
+    let hb = Sha256::digest(b.as_bytes());
+    let mut diff = 0u8;
+    for (x, y) in ha.iter().zip(hb.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+fn forbidden(msg: &str) -> Response {
+    (StatusCode::FORBIDDEN, Json(json!({ "error": msg }))).into_response()
+}
 
 async fn auth(State(st): State<Arc<AppState>>, req: Request, next: Next) -> Response {
+    let bind_host = st.config.http_host.trim();
+
+    // 1. Host guard FIRST (applies to every route, including health) — defeats
+    //    DNS-rebinding and any request that does not address us by a loopback /
+    //    configured name.
+    let host_header = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok());
+    if !host_is_allowed(host_header, bind_host) {
+        return forbidden("Forbidden: invalid Host header");
+    }
+
+    // 2. Reject cross-origin Origin on state-changing methods (CSRF defense in
+    //    depth). A missing Origin (menu bar / curl) is allowed.
+    if matches!(
+        *req.method(),
+        Method::POST | Method::DELETE | Method::PUT | Method::PATCH
+    ) {
+        if let Some(origin) = req.headers().get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
+            if !origin_is_allowed(origin, bind_host) {
+                return forbidden("Forbidden: cross-origin request");
+            }
+        }
+    }
+
     let path = req.uri().path();
     if path == "/api/health" || path == "/health" {
         return next.run(req).await;
@@ -508,7 +596,9 @@ async fn auth(State(st): State<Arc<AppState>>, req: Request, next: Next) -> Resp
     let header_tok = headers
         .get("x-filesandbox-token")
         .and_then(|v| v.to_str().ok());
-    if bearer == Some(token) || header_tok == Some(token) {
+    let authorized = bearer.map(|b| ct_eq(b, token)).unwrap_or(false)
+        || header_tok.map(|h| ct_eq(h, token)).unwrap_or(false);
+    if authorized {
         return next.run(req).await;
     }
     (
@@ -516,6 +606,20 @@ async fn auth(State(st): State<Arc<AppState>>, req: Request, next: Next) -> Resp
         Json(json!({ "error": "Unauthorized" })),
     )
         .into_response()
+}
+
+/// Bound the time any single request may occupy a worker, so a hung handler
+/// (stuck clamd socket, slow VT poll under lock, etc.) cannot pin a task forever.
+async fn request_timeout(req: Request, next: Next) -> Response {
+    const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    match tokio::time::timeout(REQUEST_TIMEOUT, next.run(req)).await {
+        Ok(resp) => resp,
+        Err(_) => (
+            StatusCode::REQUEST_TIMEOUT,
+            Json(json!({ "error": "request timed out" })),
+        )
+            .into_response(),
+    }
 }
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -536,6 +640,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/jobs/:id/quarantine", delete(delete_quarantine))
         .route("/", get(root))
         .layer(middleware::from_fn_with_state(state.clone(), auth))
+        .layer(middleware::from_fn(request_timeout))
         .with_state(state)
 }
 
@@ -741,6 +846,58 @@ mod tests {
             Some("sk-realnewkey-1234567"),
             "old"
         ));
+    }
+
+    #[test]
+    fn host_guard_allows_loopback_and_configured_host() {
+        // Loopback names always pass against a loopback bind.
+        assert!(host_is_allowed(Some("127.0.0.1"), "127.0.0.1"));
+        assert!(host_is_allowed(Some("127.0.0.1:3847"), "127.0.0.1"));
+        assert!(host_is_allowed(Some("localhost:3847"), "127.0.0.1"));
+        assert!(host_is_allowed(Some("[::1]:3847"), "127.0.0.1"));
+        // Missing Host (non-browser client) is allowed.
+        assert!(host_is_allowed(None, "127.0.0.1"));
+        // A rebinding/CSRF browser carries the attacker hostname → rejected.
+        assert!(!host_is_allowed(Some("evil.example.com"), "127.0.0.1"));
+        assert!(!host_is_allowed(Some("evil.example.com:3847"), "127.0.0.1"));
+        assert!(!host_is_allowed(Some("192.168.1.50"), "127.0.0.1"));
+        // Configured LAN host passes; wildcard bind defers to the operator.
+        assert!(host_is_allowed(Some("192.168.1.50:3847"), "192.168.1.50"));
+        assert!(host_is_allowed(Some("anything"), "0.0.0.0"));
+    }
+
+    #[test]
+    fn origin_guard_matches_authority() {
+        assert!(origin_is_allowed("http://127.0.0.1:3847", "127.0.0.1"));
+        assert!(origin_is_allowed("http://localhost:3847", "127.0.0.1"));
+        assert!(!origin_is_allowed("https://evil.example.com", "127.0.0.1"));
+        assert!(!origin_is_allowed("http://evil.example.com:3847", "127.0.0.1"));
+    }
+
+    #[test]
+    fn ct_eq_matches_only_identical_tokens() {
+        assert!(ct_eq("s3cr3t-token", "s3cr3t-token"));
+        assert!(!ct_eq("s3cr3t-token", "s3cr3t-toker"));
+        assert!(!ct_eq("short", "longer-token"));
+        assert!(!ct_eq("", "x"));
+    }
+
+    #[tokio::test]
+    async fn cross_host_request_is_forbidden() {
+        // A request addressing us by an attacker hostname (DNS-rebinding) is 403,
+        // even for the otherwise-public health route and with no token configured.
+        let app = build_router(test_state(None));
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/health")
+                    .header("host", "evil.example.com")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
     }
 
     #[test]
