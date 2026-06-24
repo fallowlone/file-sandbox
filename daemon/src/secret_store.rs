@@ -101,8 +101,19 @@ impl SecretStore for KeychainStore {
     }
 
     fn set(&self, account: &str, value: &str) -> Result<()> {
-        use security_framework::passwords::set_generic_password;
-        set_generic_password(&self.service, account, value.as_bytes())
+        use security_framework::passwords::set_generic_password_options;
+        use security_framework::passwords_options::PasswordOptions;
+        // Mark the item non-synchronizable so it can never propagate to iCloud
+        // Keychain — the half of "device-only" the no-entitlement (unsigned) path
+        // can actually enforce, matching the Swift writer's kSecAttrSynchronizable
+        // = false. A true ThisDeviceOnly protection class requires the
+        // data-protection keychain, which needs a signed app with a
+        // keychain-access-group entitlement; on the legacy file-based login
+        // keychain used here, items are already non-synced and not plaintext in
+        // backups, so this is the meaningful, signing-free guarantee.
+        let mut options = PasswordOptions::new_generic_password(&self.service, account);
+        options.set_access_synchronized(Some(false));
+        set_generic_password_options(value.as_bytes(), options)
             .map_err(|e| anyhow::anyhow!("keychain set {account}: {e}"))
     }
 
