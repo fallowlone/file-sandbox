@@ -83,6 +83,34 @@ fn parse_verdict(s: &str) -> VirusVerdict {
     }
 }
 
+/// Why (or whether) a settled scan should release the file from quarantine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RestoreDecision {
+    /// VirusTotal (or a cached VT verdict) positively cleared the file.
+    VtClean,
+    /// VT has no record of the file (hash-only privacy mode → `Inconclusive`)
+    /// but the local antivirus scanned the bytes and found nothing. The file is
+    /// released on the local engine's word alone. This is the path that keeps
+    /// private documents — which VT can never vouch for — from being trapped.
+    LocalCleanOnly,
+    /// Keep quarantined: something flagged it, or no engine ever cleared it.
+    Keep,
+}
+
+/// Pure restore decision, extracted so the privacy-vs-containment policy is
+/// testable without a live clamd or VirusTotal. `local_clean` is true only when
+/// the local scanner actually ran and returned clean — a missing/errored
+/// scanner is not a clean signal.
+fn restore_decision(local_clean: bool, vt: VirusVerdict) -> RestoreDecision {
+    match vt {
+        VirusVerdict::Clean => RestoreDecision::VtClean,
+        // VT doesn't know this content; trust the local AV that does.
+        VirusVerdict::Inconclusive if local_clean => RestoreDecision::LocalCleanOnly,
+        // Infected, Oversized, or Inconclusive-with-no-local-clean → contain.
+        _ => RestoreDecision::Keep,
+    }
+}
+
 #[cfg(unix)]
 async fn chmod(path: &Path, mode: u32) {
     use std::os::unix::fs::PermissionsExt;
@@ -516,6 +544,11 @@ impl Watcher {
 
         js.set_scanning(job_id)?;
 
+        // Tracks whether the local AV actually ran and cleared the bytes. Only a
+        // real clean verdict counts — a missing or errored scanner leaves this
+        // false so VT-unknown files stay quarantined.
+        let mut local_clean = false;
+
         // Local clamd stage (defense-in-depth).
         if let Some(scanner) = &inner.local_scanner {
             js.set_stage(job_id, "local_scan")?;
@@ -561,7 +594,7 @@ impl Watcher {
                     }
                     // bypass → fall through to VT
                 }
-                LocalVerdict::Clean => {}
+                LocalVerdict::Clean => local_clean = true,
             }
         }
 
@@ -654,16 +687,33 @@ impl Watcher {
         }
 
         js.set_stage(job_id, "done")?;
+
+        let decision = restore_decision(local_clean, result.verdict);
+        // For a local-only release, record an honest message: VT never cleared
+        // the file, the local AV did. The verdict stays `inconclusive`, so it is
+        // not written to the VT cache (no poisoning) and the UI can badge it as
+        // "verified locally" rather than "verified on VirusTotal".
+        let message = match decision {
+            RestoreDecision::LocalCleanOnly => format!(
+                "Local antivirus found no threats. VirusTotal has no record of this file \
+                 (content kept private — not uploaded); released on local scan. {}",
+                result.message
+            ),
+            _ => result.message.clone(),
+        };
         js.set_scan_result(
             job_id,
             &ScanResult {
                 verdict: result.verdict.as_str().into(),
-                message: result.message.clone(),
+                message,
             },
         )?;
 
-        if result.verdict == VirusVerdict::Clean {
-            self.restore_clean(job_id, &quarantine, &original).await?;
+        match decision {
+            RestoreDecision::VtClean | RestoreDecision::LocalCleanOnly => {
+                self.restore_clean(job_id, &quarantine, &original).await?;
+            }
+            RestoreDecision::Keep => {}
         }
         Ok(())
     }
@@ -695,6 +745,55 @@ impl Watcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restore_decision_vt_clean_always_releases() {
+        // VT positively cleared it — restore regardless of the local verdict.
+        assert_eq!(
+            restore_decision(false, VirusVerdict::Clean),
+            RestoreDecision::VtClean
+        );
+        assert_eq!(
+            restore_decision(true, VirusVerdict::Clean),
+            RestoreDecision::VtClean
+        );
+    }
+
+    #[test]
+    fn restore_decision_local_clean_releases_vt_unknown() {
+        // The core privacy fix: clamd cleared a file VT has never seen.
+        assert_eq!(
+            restore_decision(true, VirusVerdict::Inconclusive),
+            RestoreDecision::LocalCleanOnly
+        );
+    }
+
+    #[test]
+    fn restore_decision_keeps_unknown_without_local_clean() {
+        // No clean signal anywhere (scanner missing or errored) → contain.
+        assert_eq!(
+            restore_decision(false, VirusVerdict::Inconclusive),
+            RestoreDecision::Keep
+        );
+    }
+
+    #[test]
+    fn restore_decision_never_releases_threats_or_oversized() {
+        // A local-clean verdict must never override a real detection, and an
+        // oversized file stays a manual decision even when clamd cleared it.
+        assert_eq!(
+            restore_decision(true, VirusVerdict::Infected),
+            RestoreDecision::Keep
+        );
+        assert_eq!(
+            restore_decision(false, VirusVerdict::Infected),
+            RestoreDecision::Keep
+        );
+        assert_eq!(
+            restore_decision(true, VirusVerdict::Oversized),
+            RestoreDecision::Keep
+        );
+    }
 
     fn make_watcher(initial_mode: WatcherMode) -> Watcher {
         let store = Arc::new(JobStore::new(":memory:").unwrap());

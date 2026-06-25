@@ -276,6 +276,12 @@ private struct JobRow: View {
 
     private func bigVerdictPill() -> VerdictPill? {
         let v = (job.vt_verdict ?? "").lowercased()
+        let p = (job.pompelmi_verdict ?? "").lowercased()
+        // Released on the local AV alone (VT had no record) — show that plainly
+        // instead of the orange "inconclusive" the raw VT verdict would imply.
+        if job.status == "restored" && p == "clean" && v != "clean" {
+            return VerdictPill(text: L.verdictBig("local_clean"), variant: .green, size: .big, symbol: "checkmark.shield.fill")
+        }
         switch v {
         case "infected", "malicious":
             return VerdictPill(text: L.verdictBig(v), variant: .red, size: .big, symbol: "exclamationmark.triangle.fill")

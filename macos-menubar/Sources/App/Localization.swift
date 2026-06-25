@@ -48,6 +48,7 @@ enum L {
         case "inconclusive": return "verdict.inconclusive"
         case "oversized":    return "verdict.oversized"
         case "clean":        return "verdict.clean"
+        case "local_clean":  return "verdict.localClean"
         default:             return LocalizedStringKey(raw)
         }
     }
@@ -59,6 +60,7 @@ enum L {
         case "inconclusive": return "verdict.big.inconclusive"
         case "oversized":    return "verdict.big.oversized"
         case "clean":        return "verdict.big.clean"
+        case "local_clean":  return "verdict.big.localClean"
         default:             return LocalizedStringKey(raw)
         }
     }

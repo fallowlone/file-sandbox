@@ -45,10 +45,11 @@ extension VerdictPill {
     /// Priority:
     ///   1. Either verdict is `infected` / `malicious`             → red "infected"
     ///   2. status is `scanning` / `received` / `in_quarantine`    → blue "scanning"
-    ///   3. vt_verdict == `inconclusive` / `unclear`               → orange "inconclusive"
-    ///   4. vt_verdict == `oversized`                              → grey "oversized"
-    ///   5. status == `restored` or vt_verdict == `clean`          → green "clean"
-    ///   6. otherwise                                              → nil
+    ///   3. restored + local clean + VT never cleared it           → green "local" (local AV only)
+    ///   4. vt_verdict == `inconclusive` / `unclear`               → orange "inconclusive"
+    ///   5. vt_verdict == `oversized`                              → grey "oversized"
+    ///   6. status == `restored` or vt_verdict == `clean`          → green "clean"
+    ///   7. otherwise                                              → nil
     static func forJobVerdict(vt: String?, pompelmi: String?, status: String) -> VerdictPill? {
         let v = (vt ?? "").lowercased()
         let p = (pompelmi ?? "").lowercased()
@@ -61,6 +62,12 @@ extension VerdictPill {
         }
         if status == "in_quarantine" {
             return VerdictPill(text: L.verdict("queued"), variant: .blue, size: .mini, symbol: "tray")
+        }
+        // Released on the local AV's word because VirusTotal had no record of the
+        // file (hash-only privacy mode). Distinct shield badge so the user knows
+        // it was cleared locally, not confirmed on VirusTotal.
+        if status == "restored" && p == "clean" && v != "clean" {
+            return VerdictPill(text: L.verdict("local_clean"), variant: .green, size: .mini, symbol: "checkmark.shield.fill")
         }
         if v == "inconclusive" || v == "unclear" {
             return VerdictPill(text: L.verdict("inconclusive"), variant: .orange, size: .mini, symbol: "questionmark.circle.fill")

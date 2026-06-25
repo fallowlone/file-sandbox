@@ -77,11 +77,13 @@
 "verdict.inconclusive" = "inconclusive";
 "verdict.oversized" = "oversized";
 "verdict.clean" = "clean";
+"verdict.localClean" = "local";
 "verdict.big.infected" = "Infected";
 "verdict.big.malicious" = "Infected";
 "verdict.big.inconclusive" = "Inconclusive";
 "verdict.big.oversized" = "Oversized";
 "verdict.big.clean" = "Clean";
+"verdict.big.localClean" = "Clean (local AV only)";
 "session.running" = "running";
 "session.starting" = "starting";
 "session.stopped" = "stopped";

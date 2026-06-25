@@ -77,11 +77,13 @@
 "verdict.inconclusive" = "не определено";
 "verdict.oversized" = "слишком большой";
 "verdict.clean" = "чисто";
+"verdict.localClean" = "локально";
 "verdict.big.infected" = "Заражён";
 "verdict.big.malicious" = "Заражён";
 "verdict.big.inconclusive" = "Не определено";
 "verdict.big.oversized" = "Слишком большой";
 "verdict.big.clean" = "Чисто";
+"verdict.big.localClean" = "Чисто (только локальный AV)";
 "session.running" = "работает";
 "session.starting" = "запускается";
 "session.stopped" = "остановлено";
