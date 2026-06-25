@@ -33,6 +33,14 @@ const BROWSER_TEMP_EXTENSIONS: [&str; 5] =
 
 const QUARANTINE_XATTR_VALUE: &str = "0083;00000000;FileSandbox;";
 
+/// How long after restoring a file to the watch folder we ignore every event for
+/// that path. A restore writes content and then adjusts metadata (chmod 0o644 +
+/// clearing the quarantine xattr), each of which surfaces as a filesystem event;
+/// without this settle window the freshly-cleaned file is re-detected and
+/// re-quarantined, looping Moved→Restored→Moved forever. Generous enough to cover
+/// FSEvents coalescing/latency, short enough not to mask a genuine re-download.
+const RESTORE_SUPPRESS_WINDOW: Duration = Duration::from_secs(5);
+
 fn is_browser_temp(name: &str) -> bool {
     BROWSER_TEMP_EXTENSIONS
         .iter()
@@ -43,6 +51,27 @@ fn base_name(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default()
+}
+
+/// True if `path` is inside its post-restore settle window, so its own
+/// restore-generated events must be ignored. The window slides: every suppressed
+/// event refreshes the timestamp, so a slow restore (a large file whose copy
+/// outlives a single window, plus the trailing chmod/xattr) stays suppressed for
+/// its whole duration and only expires once events stop for the full window. The
+/// marker is evicted once expired.
+fn restore_suppressed(inner: &WatcherInner, path: &Path) -> bool {
+    let mut rp = inner.restoring_paths.lock().unwrap();
+    match rp.get_mut(path) {
+        Some(t) if t.elapsed() < RESTORE_SUPPRESS_WINDOW => {
+            *t = std::time::Instant::now();
+            true
+        }
+        Some(_) => {
+            rp.remove(path);
+            false
+        }
+        None => false,
+    }
 }
 
 fn parse_verdict(s: &str) -> VirusVerdict {
@@ -127,7 +156,9 @@ struct WatcherInner {
     vt_enabled: bool,
     local_scanner: Option<LocalScanner>,
     pompelmi_failure_mode: FailureMode,
-    restoring_paths: Mutex<HashSet<PathBuf>>,
+    /// Paths we just restored → when. Events for these are ignored for
+    /// [`RESTORE_SUPPRESS_WINDOW`] so a restored clean file is not re-quarantined.
+    restoring_paths: Mutex<HashMap<PathBuf, std::time::Instant>>,
     processing_paths: Mutex<HashSet<PathBuf>>,
     scan_controllers: Mutex<HashMap<String, CancellationToken>>,
     metrics: Arc<Metrics>,
@@ -174,7 +205,7 @@ impl Watcher {
             vt_enabled: opts.vt_enabled,
             local_scanner: opts.local_scanner,
             pompelmi_failure_mode: opts.pompelmi_failure_mode,
-            restoring_paths: Mutex::new(HashSet::new()),
+            restoring_paths: Mutex::new(HashMap::new()),
             processing_paths: Mutex::new(HashSet::new()),
             scan_controllers: Mutex::new(HashMap::new()),
             metrics,
@@ -183,7 +214,11 @@ impl Watcher {
 
     /// Skip re-scan when restoring from the API or a clean-pipeline restore.
     pub fn mark_restoring(&self, dest_path: PathBuf) {
-        self.0.restoring_paths.lock().unwrap().insert(dest_path);
+        self.0
+            .restoring_paths
+            .lock()
+            .unwrap()
+            .insert(dest_path, std::time::Instant::now());
     }
 
     pub fn get_mode(&self) -> WatcherMode {
@@ -300,6 +335,12 @@ impl Watcher {
                 pending.remove(&path);
                 continue;
             }
+            // Ignore a path we just restored, for the settle window: the restore's
+            // own content/chmod/xattr events must not re-lock and re-quarantine the
+            // freshly-cleaned file (the Moved→Restored→Moved duplicate loop).
+            if restore_suppressed(inner, &path) {
+                continue;
+            }
             // Reject symlinks and directories. `symlink_metadata` does NOT follow
             // the link, so a symlink dropped into the watch folder is detected and
             // skipped — we must never chmod, copy, or scan the file it points at
@@ -319,8 +360,7 @@ impl Watcher {
             if meta.is_dir() {
                 continue;
             }
-            let skip_lock = inner.restoring_paths.lock().unwrap().contains(&path)
-                || inner.processing_paths.lock().unwrap().contains(&path);
+            let skip_lock = inner.processing_paths.lock().unwrap().contains(&path);
 
             // Lock on the FIRST event of any kind for this path (Create OR a
             // rename-in Modify), not only Create. The atomic write-temp-then-rename
@@ -354,6 +394,14 @@ impl Watcher {
         pending: &mut HashMap<PathBuf, (u64, Instant)>,
         stability: Duration,
     ) {
+        // Evict expired restore markers so the map can't grow unbounded across a
+        // long-running session with many restores.
+        inner
+            .restoring_paths
+            .lock()
+            .unwrap()
+            .retain(|_, t| t.elapsed() < RESTORE_SUPPRESS_WINDOW);
+
         let now = Instant::now();
         let ready: Vec<PathBuf> = pending
             .iter()
@@ -387,8 +435,9 @@ impl Watcher {
             Err(_) => return,
             Ok(_) => {}
         }
-        // Restore in progress → consume the marker and skip.
-        if inner.restoring_paths.lock().unwrap().remove(&filepath) {
+        // Skip a path inside its post-restore settle window (defense in depth;
+        // on_raw_event already drops these before they reach pending).
+        if restore_suppressed(inner, &filepath) {
             return;
         }
         // Dedupe concurrent add/change for the same path.
@@ -625,7 +674,11 @@ impl Watcher {
             .mover
             .resolve_restore_destination(&inner.watch_path, original)
             .await;
-        inner.restoring_paths.lock().unwrap().insert(dest.clone());
+        inner
+            .restoring_paths
+            .lock()
+            .unwrap()
+            .insert(dest.clone(), std::time::Instant::now());
         // Restore to the exact path we marked so the watcher skips its own write.
         // restore_to_path normalizes mode (0o644) + clears the quarantine xattr.
         let restored = inner
@@ -689,6 +742,40 @@ mod tests {
             .insert("a".into(), c.clone());
         w.set_mode(WatcherMode::ScanPaused);
         assert!(!c.is_cancelled());
+    }
+
+    #[test]
+    fn restore_marker_suppresses_within_window_and_evicts_after() {
+        let w = make_watcher(WatcherMode::Active);
+        let p = PathBuf::from("/tmp/watch-stub/restored.bin");
+
+        // A freshly restored path is suppressed so its own restore events
+        // (content + chmod + xattr) never re-quarantine it.
+        w.mark_restoring(p.clone());
+        assert!(
+            restore_suppressed(&w.0, &p),
+            "freshly restored path must be suppressed"
+        );
+
+        // An unrelated path is never suppressed.
+        assert!(!restore_suppressed(
+            &w.0,
+            Path::new("/tmp/watch-stub/other.bin")
+        ));
+
+        // Once the window elapses the marker no longer suppresses and is evicted.
+        let stale = std::time::Instant::now()
+            .checked_sub(RESTORE_SUPPRESS_WINDOW + Duration::from_secs(1))
+            .expect("monotonic clock far enough past boot");
+        w.0.restoring_paths.lock().unwrap().insert(p.clone(), stale);
+        assert!(
+            !restore_suppressed(&w.0, &p),
+            "expired marker must not suppress"
+        );
+        assert!(
+            !w.0.restoring_paths.lock().unwrap().contains_key(&p),
+            "expired marker must be evicted"
+        );
     }
 
     #[test]
